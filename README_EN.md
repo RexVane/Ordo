@@ -11,6 +11,7 @@
 <p>
   <img src="https://img.shields.io/badge/platform-macOS%20%7C%20Windows%20%7C%20Linux-lightgrey.svg" alt="Platform: macOS | Windows | Linux"/>
   <a href="./docs/releases/v1.0.1.md"><img src="https://img.shields.io/badge/release-v1.0.1-2563EB.svg" alt="Release v1.0.1"/></a>
+  <a href="./LICENSE"><img src="https://img.shields.io/badge/License-Apache_2.0-blue.svg" alt="License: Apache 2.0"/></a>
   <img src="https://img.shields.io/badge/python-3.11+-blue.svg" alt="Python 3.11+"/>
 </p>
 
@@ -156,6 +157,6 @@ Full list: `make help`.
 
 ---
 
-## 📄 Distribution
+## 📄 License
 
-Distributed under the repository's own terms (if any) or for internal use; no third-party attribution is bundled.
+Licensed under the [Apache License 2.0](./LICENSE).

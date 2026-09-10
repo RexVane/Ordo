@@ -11,6 +11,7 @@
 <p>
   <img src="https://img.shields.io/badge/platform-macOS%20%7C%20Windows%20%7C%20Linux-lightgrey.svg" alt="Platform: macOS | Windows | Linux"/>
   <a href="./docs/releases/v1.0.1.md"><img src="https://img.shields.io/badge/release-v1.0.1-2563EB.svg" alt="Release v1.0.1"/></a>
+  <a href="./LICENSE"><img src="https://img.shields.io/badge/License-Apache_2.0-blue.svg" alt="License: Apache 2.0"/></a>
   <img src="https://img.shields.io/badge/python-3.11+-blue.svg" alt="Python 3.11+"/>
 </p>
 
@@ -156,6 +157,6 @@ make web
 
 ---
 
-## 📄 分发说明
+## 📄 开源协议
 
-本项目源码按仓库自带许可（如有）或内部使用方式分发，未附带第三方归属声明。
+本项目基于 [Apache License 2.0](./LICENSE) 开源。
