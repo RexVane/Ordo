@@ -1,0 +1,4 @@
+# Documentation ownership (update handles for your org)
+/docs-site/ @maintainers
+/scripts/docs/ @maintainers
+/docs/api/reference/ @maintainers

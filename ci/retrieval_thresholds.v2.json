@@ -1,0 +1,97 @@
+{
+  "schema": "ordo.thresholds.v2",
+  "dataset_id": "11111111-1111-1111-1111-111111111111",
+  "metrics": {
+    "retrieval_recall": { "min": 1.0 },
+    "retrieval_hit_at_20": { "min": 1.0 },
+    "retrieval_mrr": { "min": 1.0 },
+    "retrieval_ndcg_at_20": { "min": 1.0 },
+    "abstain_rate": { "max": 0.0 }
+  },
+  "slices": {
+    "file_type": {
+      "md": {
+        "retrieval_recall": { "min": 1.0 },
+        "retrieval_hit_at_20": { "min": 1.0 }
+      },
+      "pdf": {
+        "retrieval_recall": { "min": 1.0 },
+        "retrieval_hit_at_20": { "min": 1.0 }
+      },
+      "png": {
+        "retrieval_recall": { "min": 1.0 },
+        "retrieval_hit_at_20": { "min": 1.0 }
+      },
+      "docx": {
+        "retrieval_recall": { "min": 1.0 },
+        "retrieval_hit_at_20": { "min": 1.0 }
+      },
+      "xlsx": {
+        "retrieval_recall": { "min": 1.0 },
+        "retrieval_hit_at_20": { "min": 1.0 }
+      }
+    },
+    "language": {
+      "en": {
+        "retrieval_recall": { "min": 1.0 },
+        "retrieval_hit_at_20": { "min": 1.0 }
+      },
+      "zh": {
+        "retrieval_recall": { "min": 1.0 },
+        "retrieval_hit_at_20": { "min": 1.0 }
+      },
+      "mixed": {
+        "retrieval_recall": { "min": 1.0 },
+        "retrieval_hit_at_20": { "min": 1.0 }
+      }
+    }
+  },
+  "ci_retrieval_only_bounded_gate": {
+    "schema": "ordo.ci_retrieval_only_gate.v1",
+    "fixture": "data/sample/retrieval_fixture_v1.json",
+    "retrieval_mode": "keyword",
+    "top_k": 5,
+    "thresholds": {
+      "hit_at_k": { "min": 1.0 },
+      "mrr": { "min": 1.0 },
+      "ndcg_at_k": { "min": 1.0 }
+    }
+  },
+  "ci_retrieval_only_bounded_gate_hybrid": {
+    "schema": "ordo.ci_retrieval_only_gate.v1",
+    "fixture": "data/sample/retrieval_fixture_hybrid_v1.json",
+    "retrieval_mode": "hybrid",
+    "top_k": 5,
+    "thresholds": {
+      "hit_at_k": { "min": 1.0 },
+      "mrr": { "min": 1.0 },
+      "ndcg_at_k": { "min": 1.0 }
+    }
+  },
+  "ci_retrieval_only_bounded_gate_sparse": {
+    "schema": "ordo.ci_retrieval_only_gate.v1",
+    "fixture": "data/sample/retrieval_fixture_sparse_v1.json",
+    "retrieval_mode": "keyword",
+    "top_k": 5,
+    "sparse_retrieval_enabled": true,
+    "sparse_retrieval_provider": "deterministic",
+    "thresholds": {
+      "hit_at_k": { "min": 1.0 },
+      "mrr": { "min": 1.0 },
+      "ndcg_at_k": { "min": 1.0 }
+    }
+  },
+  "ci_retrieval_only_bounded_gate_colbert": {
+    "schema": "ordo.ci_retrieval_only_gate.v1",
+    "fixture": "data/sample/retrieval_fixture_colbert_v1.json",
+    "retrieval_mode": "vector",
+    "top_k": 5,
+    "colbert_retrieval_enabled": true,
+    "colbert_retrieval_provider": "deterministic",
+    "thresholds": {
+      "hit_at_k": { "min": 1.0 },
+      "mrr": { "min": 1.0 },
+      "ndcg_at_k": { "min": 1.0 }
+    }
+  }
+}

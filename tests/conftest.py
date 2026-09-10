@@ -1,0 +1,214 @@
+import os
+import socket
+from collections.abc import Callable
+
+import pytest
+from sqlalchemy import text
+
+# AUTH_MODE defaults to JWT; tests use an explicit non-production signing key.
+os.environ.setdefault("SECRET_KEY", "test-only-signing-key-not-for-production")
+
+
+def _patch_asyncio_threadsafe_wakeup_for_sandbox() -> None:
+    """
+    In this sandbox environment, Linux socket send syscalls are blocked (EPERM) even for
+    AF_UNIX socketpairs. asyncio uses `socket.socketpair()` + `csock.send(b"\\0")` as its
+    self-pipe wakeup mechanism for `loop.call_soon_threadsafe(...)`.
+
+    When `send()` is blocked, cross-thread scheduling never wakes the event loop, which
+    causes hangs in:
+    - anyio.from_thread.start_blocking_portal()
+    - Starlette/FastAPI TestClient (uses AnyIO blocking portal internally)
+
+    Workaround: detect this condition and monkeypatch asyncio to wake the selector loop
+    using `os.write(fd, b"\\0")` instead of `socket.send(...)`. `os.write()` is permitted
+    in this environment.
+    """
+
+    # Import lazily so the sandbox-specific asyncio shim only affects pytest runs.
+    import asyncio.selector_events as se  # noqa: WPS433
+
+    # Detect whether socket send is blocked by the sandbox.
+    try:
+        ssock, csock = socket.socketpair()
+        try:
+            csock.send(b"\0")
+            return  # Normal environment: no patch needed.
+        except PermissionError:
+            pass
+        finally:
+            ssock.close()
+            csock.close()
+    except Exception:
+        # If detection fails for any reason, do not risk patching asyncio globally.
+        return
+
+    def _write_to_self_via_os_write(self: object) -> None:
+        csock = getattr(self, "_csock", None)
+        if csock is None:
+            return
+        try:
+            os.write(csock.fileno(), b"\0")
+        except OSError:
+            # Mirror asyncio's behavior: swallow wakeup errors, log only in debug mode.
+            if getattr(self, "_debug", False):
+                try:
+                    se.logger.debug("Fail to write a null byte into the self-pipe socket", exc_info=True)
+                except Exception:
+                    pass
+
+    se.BaseSelectorEventLoop._write_to_self = _write_to_self_via_os_write
+
+
+def _disable_proxy_env_for_tests() -> None:
+    """
+    Starlette's TestClient uses httpx.Client without explicitly setting trust_env=False.
+    In sandboxed/offline environments we commonly have SOCKS-style proxy env vars set,
+    which can cause TestClient requests to hang (waiting on an unreachable proxy).
+
+    Tests should be hermetic and must not depend on outbound network/proxy settings, so we
+    clear proxy env vars and ensure localhost/testserver bypass is present.
+    """
+    for key in (
+        "HTTP_PROXY",
+        "HTTPS_PROXY",
+        "ALL_PROXY",
+        "http_proxy",
+        "https_proxy",
+        "all_proxy",
+    ):
+        os.environ.pop(key, None)
+
+    # Preserve any existing NO_PROXY entries but ensure local targets are always bypassed.
+    existing = str(os.environ.get("NO_PROXY") or os.environ.get("no_proxy") or "")
+    parts = {p.strip() for p in existing.split(",") if p.strip()}
+    parts.update({"testserver", "localhost", "127.0.0.1"})
+    merged = ",".join(sorted(parts))
+    os.environ["NO_PROXY"] = merged
+    os.environ["no_proxy"] = merged
+
+
+def _host_allowed_for_tests(host: object) -> bool:
+    if isinstance(host, bytes):
+        host = host.decode(errors="ignore")
+    raw = str(host or "").strip().lower()
+    if not raw:
+        return False
+    return raw in {"localhost", "::1"} or raw.startswith("127.")
+
+
+def _guard_test_network_address(kind: str, address: object) -> None:
+    if not isinstance(address, tuple) or not address:
+        return
+    if _host_allowed_for_tests(address[0]):
+        return
+    raise RuntimeError(f"Outbound network is disabled during pytest ({kind}): {address!r}")
+
+
+def _guarded_connect(orig_connect: Callable[..., object]) -> Callable[..., object]:
+    def guarded_connect(sock: socket.socket, address: object) -> object:
+        _guard_test_network_address("connect", address)
+        return orig_connect(sock, address)
+
+    return guarded_connect
+
+
+def _guarded_connect_ex(orig_connect_ex: Callable[..., object]) -> Callable[..., object]:
+    def guarded_connect_ex(sock: socket.socket, address: object) -> object:
+        _guard_test_network_address("connect_ex", address)
+        return orig_connect_ex(sock, address)
+
+    return guarded_connect_ex
+
+
+def _guarded_create_connection(orig_create_connection: Callable[..., object]) -> Callable[..., object]:
+    def guarded_create_connection(address: object, *args: object, **kwargs: object) -> object:
+        _guard_test_network_address("create_connection", address)
+        return orig_create_connection(address, *args, **kwargs)
+
+    return guarded_create_connection
+
+
+def _guarded_getaddrinfo(orig_getaddrinfo: Callable[..., object]) -> Callable[..., object]:
+    def guarded_getaddrinfo(host: object, *args: object, **kwargs: object) -> object:
+        if not _host_allowed_for_tests(host):
+            raise RuntimeError(f"Outbound network is disabled during pytest (getaddrinfo): {host!r}")
+        return orig_getaddrinfo(host, *args, **kwargs)
+
+    return guarded_getaddrinfo
+
+
+def _block_outbound_network_for_tests() -> None:
+    """
+    Keep pytest hermetic by rejecting outbound non-local network access.
+
+    This converts accidental public-network calls into immediate test failures instead of
+    long hangs caused by blocked TLS/proxy egress in sandboxed environments.
+    """
+
+    socket.socket.connect = _guarded_connect(socket.socket.connect)
+    socket.socket.connect_ex = _guarded_connect_ex(socket.socket.connect_ex)
+    socket.create_connection = _guarded_create_connection(socket.create_connection)
+    socket.getaddrinfo = _guarded_getaddrinfo(socket.getaddrinfo)
+
+
+_disable_proxy_env_for_tests()
+_block_outbound_network_for_tests()
+_patch_asyncio_threadsafe_wakeup_for_sandbox()
+
+# Initialize application-level dependency compatibility hooks before services.
+import app  # noqa: F401,E402
+
+APP_COMPAT_PACKAGE = app
+
+
+def _integration_enabled() -> bool:
+    return str(os.getenv("ORDO_INTEGRATION_TESTS", "") or "").strip().lower() in {"1", "true", "yes", "y", "on"}
+
+
+@pytest.fixture()
+def pg_session():
+    """
+    Postgres-backed DB session for integration tests.
+
+    Disabled by default. Enable with:
+      - set ORDO_INTEGRATION_TESTS=1
+      - set DATABASE_URL to a dedicated test database
+      - run `make db-upgrade` before pytest
+    """
+    if not _integration_enabled():
+        pytest.skip("Integration tests disabled (set ORDO_INTEGRATION_TESTS=1)")
+
+    # Import models lazily so pure unit tests don't pull DB config eagerly.
+    import app.models._all  # noqa: F401
+    from app.core.database import SessionLocal, engine  # noqa: WPS433
+
+    _ = app.models._all.REGISTERED_MODEL_MODULES
+    db = SessionLocal()
+    try:
+        yield db
+    finally:
+        try:
+            db.rollback()
+        except Exception:
+            pass
+        db.close()
+
+    # Best-effort cleanup for the next test run.
+    try:
+        with engine.begin() as conn:
+            conn.execute(text("TRUNCATE TABLE messages RESTART IDENTITY CASCADE;"))
+            conn.execute(text("TRUNCATE TABLE conversations RESTART IDENTITY CASCADE;"))
+            conn.execute(text("TRUNCATE TABLE dataset_profile_scan_runs RESTART IDENTITY CASCADE;"))
+            conn.execute(text("TRUNCATE TABLE ingest_dead_letters RESTART IDENTITY CASCADE;"))
+            conn.execute(text("TRUNCATE TABLE document_parsed_contents RESTART IDENTITY CASCADE;"))
+            conn.execute(text("TRUNCATE TABLE document_chunks RESTART IDENTITY CASCADE;"))
+            conn.execute(text("TRUNCATE TABLE document_permissions RESTART IDENTITY CASCADE;"))
+            conn.execute(text("TRUNCATE TABLE documents RESTART IDENTITY CASCADE;"))
+            conn.execute(text("TRUNCATE TABLE dataset_permissions RESTART IDENTITY CASCADE;"))
+            conn.execute(text("TRUNCATE TABLE datasets RESTART IDENTITY CASCADE;"))
+            conn.execute(text("TRUNCATE TABLE tenant_members RESTART IDENTITY CASCADE;"))
+            conn.execute(text("TRUNCATE TABLE tenants RESTART IDENTITY CASCADE;"))
+    except Exception:
+        # Do not fail tests due to cleanup issues.
+        pass

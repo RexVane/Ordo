@@ -1,0 +1,33 @@
+target-version = "py311"
+line-length = 120
+force-exclude = true
+
+extend-exclude = [
+  ".git",
+  ".idea",
+  ".pytest_cache",
+  ".ruff_cache",
+  ".shared",
+  "docs",
+  "uploads",
+  "web",
+]
+
+[lint]
+select = ["E4", "E7", "E9", "F", "I", "B007", "B009", "B010", "B011", "B039", "B904", "B905", "BLE001", "N", "T201"]
+ignore = ["N813"]
+fixable = ["ALL"]
+
+[lint.per-file-ignores]
+"app/main.py" = ["E402"]
+"app/deepdoc/parser/pdf_parser.py" = ["E402"]
+"app/api/v1/**" = ["BLE001"]
+"app/deepdoc/**" = ["B", "BLE001", "N"]
+"app/parsing/**" = ["BLE001"]
+"app/rag/**" = ["BLE001"]
+"app/services/**" = ["BLE001"]
+"app/storage/**" = ["BLE001"]
+"app/third_party/**" = ["B", "BLE001", "N"]
+"scripts/**" = ["BLE001", "T201"]
+"tests/**" = ["BLE001"]
+"docker/olmocr/**" = ["BLE001", "B904"]

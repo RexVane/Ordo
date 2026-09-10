@@ -1,0 +1,46 @@
+services:
+  # Next.js frontend (production build).
+  #
+  # Usage (from repo root):
+  #   docker compose -f docker/docker-compose.yml -f docker/docker-compose.web.yml up -d --build
+  #
+  # Notes:
+  # - `NEXT_PUBLIC_*` are baked at build time (client-side).
+  # - `API_INTERNAL_URL` is server-side only (container-to-container).
+  web:
+    build:
+      context: ../web
+      dockerfile: Dockerfile.prod
+      network: ${DOCKER_BUILD_NETWORK:-default}
+      args:
+        PNPM_REGISTRY: ${PNPM_REGISTRY:-https://registry.npmmirror.com}
+        NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL_DOCKER:-/}
+        NEXT_PUBLIC_ADMIN_CONTACT_URL: ${NEXT_PUBLIC_ADMIN_CONTACT_URL:-mailto:admin@example.com}
+        API_INTERNAL_URL: ${API_INTERNAL_URL_DOCKER:-http://ordo-api:8000}
+        NEXT_PUBLIC_API_TIMEOUT_MS: ${NEXT_PUBLIC_API_TIMEOUT_MS:-60000}
+        NEXT_PUBLIC_API_LONG_TIMEOUT_MS: ${NEXT_PUBLIC_API_LONG_TIMEOUT_MS:-600000}
+        NEXT_PUBLIC_USER_ID: ${NEXT_PUBLIC_USER_ID:-demo}
+        NEXT_PUBLIC_TENANT_ID: ${NEXT_PUBLIC_TENANT_ID:-00000000-0000-0000-0000-000000000000}
+        ORDO_BUILD_SHA: ${ORDO_BUILD_SHA:-}
+        ORDO_BUILD_TIME: ${ORDO_BUILD_TIME:-}
+    restart: unless-stopped
+    ports:
+      - "${WEB_PORT:-3000}:3000"
+    environment:
+      NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL_DOCKER:-/}
+      NEXT_PUBLIC_ADMIN_CONTACT_URL: ${NEXT_PUBLIC_ADMIN_CONTACT_URL:-mailto:admin@example.com}
+      NEXT_PUBLIC_API_TIMEOUT_MS: ${NEXT_PUBLIC_API_TIMEOUT_MS:-60000}
+      NEXT_PUBLIC_API_LONG_TIMEOUT_MS: ${NEXT_PUBLIC_API_LONG_TIMEOUT_MS:-600000}
+      NEXT_PUBLIC_USER_ID: ${NEXT_PUBLIC_USER_ID:-demo}
+      NEXT_PUBLIC_TENANT_ID: ${NEXT_PUBLIC_TENANT_ID:-00000000-0000-0000-0000-000000000000}
+      # Server-side only: used when Next.js renders on the server (not exposed to browser).
+      API_INTERNAL_URL: ${API_INTERNAL_URL_DOCKER:-http://ordo-api:8000}
+      MARKDOWN_IMAGE_PROXY_SECRET: ${MARKDOWN_IMAGE_PROXY_SECRET:-}
+      ORDO_BUILD_SHA: ${ORDO_BUILD_SHA:-}
+      ORDO_BUILD_TIME: ${ORDO_BUILD_TIME:-}
+    depends_on:
+      ordo-api:
+        condition: service_healthy
+    networks:
+      ordo-proxy:
+        ipv4_address: ${WEB_PROXY_IP_DOCKER:-172.30.0.10}

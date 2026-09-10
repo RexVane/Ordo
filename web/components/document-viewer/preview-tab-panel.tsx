@@ -1,0 +1,172 @@
+"use client"
+
+import { useMemo, useState } from "react"
+import { FileText, Loader2 } from "lucide-react"
+
+import type { DocumentPreviewAnchor } from "@/lib/document-preview-anchor"
+import { buildDocumentPreviewBboxOverlay } from "@/lib/document-preview-anchor"
+import type { Document } from "@/types"
+import { Button } from "@/components/ui/button"
+import { PdfViewer } from "@/components/parsing/pdf-viewer"
+
+type PreviewTabPanelProps = {
+  isLoading: boolean
+  doc: Document | null
+  canInlinePreview: boolean
+  fileUrl: string | null
+  rawFileUrl: string | null
+  downloadUrl: string | null
+  previewAnchor: DocumentPreviewAnchor | null
+  highlightChunkId: string | null
+  highlightRange: { start: number; end: number } | null
+  onViewText: () => void
+  onViewChunks: () => void
+}
+
+export function PreviewTabPanel({
+  isLoading,
+  doc,
+  canInlinePreview,
+  fileUrl,
+  rawFileUrl,
+  downloadUrl,
+  previewAnchor,
+  highlightChunkId,
+  highlightRange,
+  onViewText,
+  onViewChunks,
+}: Readonly<PreviewTabPanelProps>) {
+  const [anchorActionsCollapsed, setAnchorActionsCollapsed] = useState(false)
+  const bboxOverlay = useMemo(() => buildDocumentPreviewBboxOverlay(previewAnchor), [previewAnchor])
+  const previewPageIndex = useMemo(() => {
+    if (bboxOverlay) return null
+    const pageNumber = previewAnchor?.pageNumber
+    if (typeof pageNumber !== "number" || !Number.isFinite(pageNumber) || pageNumber <= 0) return null
+    return Math.trunc(pageNumber) - 1
+  }, [bboxOverlay, previewAnchor?.pageNumber])
+
+  if (isLoading && !doc) {
+    return (
+      <div className="flex h-full items-center justify-center text-muted-foreground">
+        <Loader2 className="size-8 animate-spin motion-reduce:animate-none" />
+      </div>
+    )
+  }
+
+  if (canInlinePreview && fileUrl) {
+    const hasAnchorContext = Boolean(previewAnchor || highlightChunkId || highlightRange)
+    const title = previewAnchor?.pageNumber ? "PDF 已跳转到引用页" : "已保留引用定位"
+    const searchText = previewAnchor?.searchText ? `，并尝试搜索“${previewAnchor.searchText}”` : ""
+    const description = previewAnchor?.pageNumber
+      ? `当前定位到 P.${previewAnchor.pageNumber}${searchText}。`
+      : "当前引用定位已保留，可切回文本定位查看高亮，或切到智能切片查看命中块。"
+
+    return (
+      <div className="relative h-full w-full">
+        {hasAnchorContext ? (
+          anchorActionsCollapsed ? (
+            <button
+              type="button"
+              aria-label="展开引用定位"
+              aria-expanded="false"
+              onClick={() => setAnchorActionsCollapsed(false)}
+              className="absolute right-4 top-4 z-10 flex size-10 items-center justify-center rounded-full border border-border/70 bg-background/95 text-xs font-semibold text-foreground shadow-lg backdrop-blur transition-colors hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/60"
+              title="展开引用定位"
+            >
+              引
+            </button>
+          ) : (
+            <div className="absolute inset-x-4 top-4 z-10 flex justify-end">
+              <div className="max-w-md rounded-xl border border-border/70 bg-background/95 p-3 shadow-lg backdrop-blur">
+                <div className="flex items-start justify-between gap-3">
+                  <div>
+                    <div className="text-xs font-semibold text-foreground">{title}</div>
+                    <p className="mt-1 text-[11px] leading-relaxed text-muted-foreground">{description}</p>
+                  </div>
+                  <button
+                    type="button"
+                    aria-label="收起引用定位"
+                    aria-expanded="true"
+                    onClick={() => setAnchorActionsCollapsed(true)}
+                    className="flex size-7 shrink-0 items-center justify-center rounded-full border border-border/70 bg-background/80 text-sm leading-none text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/60"
+                    title="收起引用定位"
+                  >
+                    -
+                  </button>
+                </div>
+                <div className="mt-3 flex flex-wrap justify-end gap-2">
+                  {highlightRange ? (
+                    <Button type="button" size="sm" variant="outline" onClick={onViewText}>
+                      查看文本高亮
+                    </Button>
+                  ) : null}
+                  {highlightChunkId ? (
+                    <Button type="button" size="sm" onClick={onViewChunks}>
+                      查看切片
+                    </Button>
+                  ) : null}
+                </div>
+              </div>
+            </div>
+          )
+        ) : null}
+        <div
+          data-pdfjs-document-preview="true"
+          data-citation-bbox-preview={bboxOverlay ? "true" : undefined}
+          className="h-full w-full bg-muted/20"
+        >
+          <PdfViewer
+            fileUrl={fileUrl}
+            boxesByPage={bboxOverlay?.boxesByPage}
+            blockIdToPageIndex={bboxOverlay?.blockIdToPageIndex}
+            activeBlockIds={bboxOverlay?.activeBlockIds}
+            scrollToPageIndex={previewPageIndex}
+            showAllBoxes={false}
+          />
+        </div>
+      </div>
+    )
+  }
+
+  if (canInlinePreview && rawFileUrl) {
+    return (
+      <div className="flex h-full items-center justify-center text-muted-foreground">
+        <Loader2 className="size-8 animate-spin motion-reduce:animate-none" />
+      </div>
+    )
+  }
+
+  return (
+    <div className="flex h-full items-center justify-center p-6">
+      <div className="w-full max-w-md rounded-xl border border-border bg-background p-6 shadow-sm">
+        <div className="flex items-start gap-3">
+          <div className="rounded-lg bg-primary/10 p-2">
+            <FileText className="size-5 text-primary" />
+          </div>
+          <div className="flex-1">
+            <h4 className="text-sm font-semibold">暂不支持内嵌预览</h4>
+            <p className="mt-1 text-xs text-muted-foreground">
+              当前文件类型为 <span className="font-mono">{doc?.file_type || "-"}</span>。你可以下载原文件，或切换到「智能切片」查看内容。
+            </p>
+            <div className="mt-4 flex items-center gap-2">
+              {downloadUrl ? (
+                <Button size="sm" variant="outline" asChild>
+                  <a href={downloadUrl} target="_blank" rel="noopener noreferrer">
+                    下载原文件
+                  </a>
+                </Button>
+              ) : (
+                <Button size="sm" variant="outline" disabled title="后端未返回原文件下载地址">
+                  下载原文件
+                </Button>
+              )}
+              <Button size="sm" onClick={onViewChunks}>
+                查看切片
+              </Button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  )
+}

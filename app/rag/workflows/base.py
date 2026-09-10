@@ -1,0 +1,245 @@
+"""
+Base workflow interface and common types.
+
+Defines the abstract base class for all workflow patterns
+and the WorkflowMode enumeration.
+"""
+
+
+import asyncio
+from abc import ABC, abstractmethod
+from collections.abc import Awaitable, Callable
+from dataclasses import dataclass, field
+from enum import Enum
+from functools import wraps
+from typing import Any, TypedDict
+
+from app.core.config import settings
+
+
+class WorkflowMode(str, Enum):
+    """Available workflow modes."""
+    CHAIN = "chain"
+    ROUTING = "routing"
+    PARALLEL = "parallel"
+    REACT = "react"
+    PLANNER = "planner"
+    EVALUATOR = "evaluator"
+
+
+class WorkflowState(TypedDict, total=False):
+    """Standard workflow state structure."""
+    question: str
+    query: str
+    history: list[dict[str, str]]
+    context: str
+    contexts: list[dict[str, Any]]
+    answer: str
+    citations: list[dict[str, Any]]
+    metadata: dict[str, Any]
+    error: str | None
+    # Workflow-specific fields
+    route: str | None
+    plan: list[str] | None
+    current_step: int
+    iterations: int
+    score: float
+    reasoning_trace: list[str]
+
+
+@dataclass
+class WorkflowResult:
+    """Result of a workflow execution."""
+    success: bool
+    state: dict[str, Any]
+    answer: str = ""
+    error: str | None = None
+    iterations: int = 0
+    execution_path: list[str] = field(default_factory=list)
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+
+class BaseWorkflow(ABC):
+    """
+    Abstract base class for workflow patterns.
+
+    All workflow implementations must inherit from this class
+    and implement the run() method.
+
+    Attributes:
+        name: Workflow name for logging/tracing
+        mode: WorkflowMode enumeration value
+        max_iterations: Maximum iterations for iterative workflows
+        timeout_sec: Execution timeout in seconds
+    """
+
+    def __init__(
+        self,
+        name: str | None = None,
+        max_iterations: int = 10,
+        timeout_sec: int = 120,
+        **kwargs,
+    ):
+        """
+        Initialize the workflow.
+
+        Args:
+            name: Optional workflow name
+            max_iterations: Maximum iterations
+            timeout_sec: Execution timeout
+            **kwargs: Additional configuration
+        """
+        self.name = name or self.__class__.__name__
+        self.max_iterations = max_iterations
+        self.timeout_sec = timeout_sec
+        self._config = kwargs
+        self._wrap_agent_middlewares()
+
+    def _wrap_agent_middlewares(self) -> None:
+        enabled = bool(getattr(settings, "MIDDLEWARE_ENABLED", True))
+        if not enabled:
+            return
+
+        from app.rag.middleware import AgentMiddlewareChain
+
+        chain = AgentMiddlewareChain()
+        original_run = self.run
+        if not asyncio.iscoroutinefunction(original_run):
+            return
+
+        @wraps(original_run)
+        async def wrapped(state: dict[str, Any]) -> "WorkflowResult":
+            initial_state = dict(state or {})
+            initial_state["_agent"] = {
+                "workflow": self.name,
+                "mode": self.mode.value,
+            }
+            initial_state = chain.run_before(initial_state)
+
+            result = await original_run(initial_state)
+
+            final_state = dict((result.state or {}))
+            agent_ctx = dict(final_state.get("_agent") or {})
+            agent_ctx.update(
+                {
+                    "workflow": self.name,
+                    "mode": self.mode.value,
+                    "success": result.success,
+                    "error": result.error,
+                    "iterations": result.iterations,
+                    "execution_path": result.execution_path,
+                }
+            )
+            final_state["_agent"] = agent_ctx
+            final_state = chain.run_after(final_state)
+            final_state.pop("_agent", None)
+
+            result.state = final_state
+            if "answer" in final_state:
+                result.answer = final_state.get("answer") or result.answer
+            return result
+
+        # Monkey-patch instance method to keep API stable for all workflows.
+        self.run = wrapped  # type: ignore[method-assign]
+
+    @property
+    @abstractmethod
+    def mode(self) -> WorkflowMode:
+        """Return the workflow mode."""
+        pass
+
+    @abstractmethod
+    async def run(self, state: dict[str, Any]) -> WorkflowResult:
+        """
+        Execute the workflow.
+
+        Args:
+            state: Initial state dictionary
+
+        Returns:
+            WorkflowResult with final state and metadata
+        """
+        pass
+
+    def validate_state(self, state: dict[str, Any]) -> bool:
+        """
+        Validate that state has required fields.
+
+        Args:
+            state: State to validate
+
+        Returns:
+            True if valid
+        """
+        return "question" in state or "query" in state
+
+    def get_question(self, state: dict[str, Any]) -> str:
+        """Extract question from state."""
+        return state.get("question") or state.get("query") or ""
+
+    def create_result(
+        self,
+        state: dict[str, Any],
+        success: bool = True,
+        error: str | None = None,
+        **kwargs,
+    ) -> WorkflowResult:
+        """
+        Create a WorkflowResult from state.
+
+        Args:
+            state: Final state
+            success: Whether workflow succeeded
+            error: Optional error message
+            **kwargs: Additional result fields
+
+        Returns:
+            WorkflowResult
+        """
+        return WorkflowResult(
+            success=success,
+            state=state,
+            answer=state.get("answer", ""),
+            error=error,
+            iterations=kwargs.get("iterations", 0),
+            execution_path=kwargs.get("execution_path", []),
+            metadata=kwargs.get("metadata", {}),
+        )
+
+
+class WorkflowStep:
+    """
+    Represents a single step in a workflow.
+
+    Wraps a function that transforms state.
+    """
+
+    def __init__(
+        self,
+        name: str,
+        func: Callable[[dict[str, Any]], Awaitable[dict[str, Any]]],
+        condition: Callable[[dict[str, Any]], bool] | None = None,
+    ):
+        """
+        Initialize a workflow step.
+
+        Args:
+            name: Step name
+            func: Async function that transforms state
+            condition: Optional condition to check before executing
+        """
+        self.name = name
+        self.func = func
+        self.condition = condition
+
+    async def execute(self, state: dict[str, Any]) -> dict[str, Any]:
+        """Execute the step."""
+        if self.condition and not self.condition(state):
+            return state
+        return await self.func(state)
+
+    def should_execute(self, state: dict[str, Any]) -> bool:
+        """Check if step should execute."""
+        if self.condition is None:
+            return True
+        return self.condition(state)

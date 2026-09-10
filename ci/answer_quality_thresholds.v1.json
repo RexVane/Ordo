@@ -1,0 +1,29 @@
+{
+  "schema": "ordo.answer_quality_thresholds.v1",
+  "metrics": {
+    "llm_judge_generation_avg": {
+      "min": 0.6,
+      "required": true
+    },
+    "llm_judge_overall_avg": {
+      "min": 0.6,
+      "required": true
+    },
+    "faithfulness_det": {
+      "min": 0.15,
+      "required": false
+    },
+    "refusal_correctness": {
+      "min": 0.7,
+      "required": false
+    },
+    "refusal_false_positive_rate": {
+      "max": 0.3,
+      "required": false
+    },
+    "abstain_rate": {
+      "max": 0.6,
+      "required": false
+    }
+  }
+}

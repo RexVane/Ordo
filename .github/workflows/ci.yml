@@ -1,0 +1,1756 @@
+name: CI
+
+on:
+  workflow_dispatch:
+  pull_request:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  SELF_HOSTED_PYTHON_BIN: ${{ vars.CI_SELF_HOSTED_PYTHON_BIN || '' }}
+  SELF_HOSTED_VENV_DIR: ${{ vars.CI_SELF_HOSTED_VENV_DIR || '' }}
+  PIP_INDEX_URL: ${{ vars.CI_PIP_INDEX_URL || 'https://pypi.org/simple' }}
+  PIP_CACHE_DIR: ${{ vars.CI_PIP_CACHE_DIR || '' }}
+  TORCH_WHEEL_DIR: ${{ vars.CI_TORCH_WHEEL_DIR || '' }}
+  SELF_HOSTED_HTTP_PROXY: ${{ vars.CI_HTTP_PROXY || '' }}
+  SELF_HOSTED_HTTPS_PROXY: ${{ vars.CI_HTTPS_PROXY || '' }}
+  SELF_HOSTED_NO_PROXY: ${{ vars.CI_NO_PROXY || '' }}
+
+jobs:
+  public-pr-verify:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      PIP_INDEX_URL: https://pypi.org/simple
+      PIP_CACHE_DIR: /home/runner/.cache/pip
+      TORCH_WHEEL_DIR: /home/runner/.cache/torch-wheels
+    services:
+      postgres:
+        image: postgres:15
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: ordo_ci
+        ports:
+          - 5432/tcp
+        options: >-
+          --health-cmd "pg_isready -U postgres -d ordo_ci"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379/tcp
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320 # v4.4.0
+        with:
+          package_json_file: web/package.json
+
+      - name: Set up Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            requirements-dev.txt
+
+      - name: Set up Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: "20"
+          cache: pnpm
+          cache-dependency-path: web/pnpm-lock.yaml
+
+      - name: Cache torch CPU wheels
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: /home/runner/.cache/torch-wheels
+          key: torch-wheels-${{ runner.os }}-py311-${{ hashFiles('ci/download_verified_wheels.py') }}
+
+      - name: Cache Playwright browsers
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: /home/runner/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ hashFiles('web/pnpm-lock.yaml') }}
+
+      - name: Install Python deps
+        run: |
+          mkdir -p "$PIP_CACHE_DIR" "$TORCH_WHEEL_DIR"
+          python -m pip install --upgrade pip
+          python ci/download_verified_wheels.py --cache-dir "$TORCH_WHEEL_DIR"
+          python -m pip install --retries 5 --timeout 120 \
+            "$TORCH_WHEEL_DIR/torch-2.13.0+cpu-cp311-cp311-manylinux_2_28_x86_64.whl" \
+            "$TORCH_WHEEL_DIR/torchvision-0.28.0+cpu-cp311-cp311-manylinux_2_28_x86_64.whl"
+          python -m pip install --retries 10 --timeout 120 -r requirements-dev.txt
+
+      - name: Install web deps
+        working-directory: web
+        run: pnpm install --frozen-lockfile
+
+      - name: OpenAPI types check
+        run: make openapi-check
+
+      - name: Prepare CI env file
+        run: cp .env.example .env
+
+      - name: Validate Docker Compose manifests
+        run: |
+          docker compose --env-file .env -f docker/docker-compose.yml config --quiet
+          docker compose --env-file .env -f docker/docker-compose.yml -f docker/docker-compose.web.yml config --quiet
+          docker compose -f docker/docker-compose.retrieval-dev.yml config --quiet
+
+      - name: Validate Helm chart
+        run: |
+          docker run --rm -v "$PWD:/work" -w /work alpine/helm@sha256:aef9b56f64e866207d9591d0abd8f6d767b36aadd12edf68f8a719716d9d29c9 lint deploy/helm/ordo
+          docker run --rm -v "$PWD:/work" -w /work alpine/helm@sha256:aef9b56f64e866207d9591d0abd8f6d767b36aadd12edf68f8a719716d9d29c9 template ordo deploy/helm/ordo >/dev/null
+          for values in deploy/helm/ordo/examples/*.yaml; do
+            docker run --rm -v "$PWD:/work" -w /work alpine/helm@sha256:aef9b56f64e866207d9591d0abd8f6d767b36aadd12edf68f8a719716d9d29c9 \
+              template ordo deploy/helm/ordo -f "$values" >/dev/null
+          done
+
+      - name: Backend tests
+        env:
+          LLM_MOCK_ENABLED: "true"
+          LLM_API_KEY: "sk-test"
+          OPENAI_API_KEY: "sk-test"
+        run: make test
+
+      - name: PR deterministic retrieval-ranking proxy gate
+        env:
+          LLM_MOCK_ENABLED: "true"
+        run: |
+          mkdir -p artifacts
+          python scripts/run_sample_retrieval_benchmark.py \
+            --fixture data/sample/retrieval_fixture_hybrid_v1.json \
+            --out artifacts/sample_retrieval_bench.json \
+            --retrieval-mode hybrid \
+            --top-k 5
+          python scripts/build_rag_quality_gate_artifacts.py \
+            --benchmark artifacts/sample_retrieval_bench.json \
+            --summary-out artifacts/retrieval_ranking_proxy.summary.json \
+            --report-out artifacts/retrieval_ranking_proxy_gate.report.json
+          python -m pytest -q tests/rag/evaluation/test_rag_quality_gate.py
+
+      - name: Database migrations and integration tests
+        env:
+          DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:${{ job.services.postgres.ports['5432'] }}/ordo_ci
+          SECRET_KEY: ci-db-upgrade-secret-key-0123456789
+          ORDO_DB_CREATE_ALL_ON_STARTUP: "false"
+          ORDO_DB_RUNTIME_MIGRATIONS_ENABLED: "false"
+          ORDO_INTEGRATION_TESTS: "1"
+        run: |
+          make db-upgrade
+          python -m pytest -q \
+            tests/test_alembic_upgrade_from_prior_revision.py \
+            tests/test_core_schema_integration.py \
+            tests/test_document_version_diff_integration.py \
+            tests/test_document_versions_integration.py
+
+      - name: PR hosted live core gate
+        env:
+          DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:${{ job.services.postgres.ports['5432'] }}/ordo_ci
+          REDIS_URL: redis://127.0.0.1:${{ job.services.redis.ports['6379'] }}/0
+          ORDO_DB_CREATE_ALL_ON_STARTUP: "false"
+          ORDO_DB_RUNTIME_MIGRATIONS_ENABLED: "false"
+        run: bash scripts/run_ci_live_core_gate.sh artifacts/live-core-release-gate.pr.json
+
+      - name: Upload PR live core gate artifacts
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: public-pr-live-core-gate
+          path: |
+            artifacts/live-core-release-gate.pr.json
+            artifacts/live-core-primary.log
+            artifacts/live-core-secondary.log
+          if-no-files-found: error
+
+      - name: Frontend verify
+        run: make verify
+
+      - name: Frontend tests
+        run: make test-web
+
+      - name: Frontend build
+        working-directory: web
+        run: pnpm run build
+
+      - name: Install Playwright browsers for PR browser smoke
+        working-directory: web
+        run: pnpm exec playwright install --with-deps chromium
+
+      - name: PR hosted browser smoke
+        working-directory: web
+        env:
+          PLAYWRIGHT_REUSE_BUILD: "1"
+        run: pnpm exec playwright test e2e/document-chat.smoke.spec.ts
+
+  test-and-verify:
+    if: github.event_name != 'pull_request'
+    runs-on: [self-hosted, Linux, X64, ordo]
+    timeout-minutes: 90
+    services:
+      postgres:
+        image: postgres:15
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: ordo_ci
+        ports:
+          - 5432/tcp
+        options: >-
+          --health-cmd "pg_isready -U postgres -d ordo_ci"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          clean: true
+        env:
+          http_proxy: ${{ vars.CI_HTTP_PROXY || '' }}
+          https_proxy: ${{ vars.CI_HTTPS_PROXY || '' }}
+          no_proxy: ${{ vars.CI_NO_PROXY != '' && format('127.0.0.1,localhost,{0}', vars.CI_NO_PROXY) || '127.0.0.1,localhost' }}
+
+      - name: Ensure self-hosted toolchain
+        if: ${{ runner.environment == 'self-hosted' }}
+        run: |
+          bash scripts/prepare_self_hosted_ci.sh --include-torch-wheel-dir
+          command -v rg
+          rg --version | head -n 1
+
+      - name: Prepare self-hosted Node
+        if: ${{ runner.environment == 'self-hosted' }}
+        run: |
+          node -v
+          npm -v
+          pnpm -v
+
+      - name: Install Python deps
+        run: |
+          mkdir -p "$PIP_CACHE_DIR" "$TORCH_WHEEL_DIR"
+          python -m pip install --upgrade pip
+          python ci/download_verified_wheels.py --cache-dir "$TORCH_WHEEL_DIR"
+          python -m pip install --retries 5 --timeout 120 \
+            "$TORCH_WHEEL_DIR/torch-2.13.0+cpu-cp311-cp311-manylinux_2_28_x86_64.whl" \
+            "$TORCH_WHEEL_DIR/torchvision-0.28.0+cpu-cp311-cp311-manylinux_2_28_x86_64.whl"
+          python -m pip install --retries 10 --timeout 120 -r requirements-dev.txt
+
+      - name: Install web deps
+        working-directory: web
+        run: pnpm install --frozen-lockfile
+
+      - name: OpenAPI types check
+        run: make openapi-check
+
+      - name: API types drift gate
+        working-directory: web
+        run: node scripts/check-api-types-drift.mjs --strict --baseline scripts/api-types-drift-baseline.json
+
+      - name: Backend tests
+        env:
+          LLM_MOCK_ENABLED: "true"
+          LLM_API_KEY: "sk-test"
+          OPENAI_API_KEY: "sk-test"
+        run: make test
+
+      - name: Database migrations and integration tests
+        env:
+          DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:${{ job.services.postgres.ports['5432'] }}/ordo_ci
+          SECRET_KEY: ci-db-upgrade-secret-key-0123456789
+          ORDO_DB_CREATE_ALL_ON_STARTUP: "false"
+          ORDO_DB_RUNTIME_MIGRATIONS_ENABLED: "false"
+          ORDO_INTEGRATION_TESTS: "1"
+        run: |
+          make db-upgrade
+          python -m pytest -q \
+            tests/test_alembic_upgrade_from_prior_revision.py \
+            tests/test_core_schema_integration.py \
+            tests/test_document_version_diff_integration.py \
+            tests/test_document_versions_integration.py
+
+      - name: Generate full-stack test inventory
+        run: make test-matrix
+
+      - name: Repo verify
+        run: make verify
+
+      - name: Upload full-stack test inventory
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: full-stack-test-inventory
+          path: |
+            artifacts/test-coverage-matrix.json
+            artifacts/test-coverage-matrix.md
+          if-no-files-found: error
+
+  web-test-and-verify:
+    if: github.event_name != 'pull_request'
+    runs-on: [self-hosted, Linux, X64, ordo]
+    timeout-minutes: 45
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          clean: true
+        env:
+          http_proxy: ${{ vars.CI_HTTP_PROXY || '' }}
+          https_proxy: ${{ vars.CI_HTTPS_PROXY || '' }}
+          no_proxy: ${{ vars.CI_NO_PROXY != '' && format('127.0.0.1,localhost,{0}', vars.CI_NO_PROXY) || '127.0.0.1,localhost' }}
+
+      - name: Prepare self-hosted Node
+        if: ${{ runner.environment == 'self-hosted' }}
+        run: |
+          node -v
+          npm -v
+          pnpm -v
+
+      - name: Install web deps
+        working-directory: web
+        run: pnpm install --frozen-lockfile
+
+      - name: Frontend tests
+        run: make test-web
+
+      - name: Critical frontend coverage
+        working-directory: web
+        run: pnpm run test:coverage:critical
+
+      - name: Install Playwright browsers
+        if: ${{ runner.environment == 'self-hosted' }}
+        working-directory: web
+        run: pnpm exec playwright install chromium
+
+      - name: Browser smoke suite
+        run: make test-web-e2e
+
+  docker-build:
+    if: github.event_name != 'pull_request'
+    runs-on: [self-hosted, Linux, X64, ordo]
+    timeout-minutes: 90
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          clean: true
+        env:
+          http_proxy: ${{ vars.CI_HTTP_PROXY || '' }}
+          https_proxy: ${{ vars.CI_HTTPS_PROXY || '' }}
+          no_proxy: ${{ vars.CI_NO_PROXY != '' && format('127.0.0.1,localhost,{0}', vars.CI_NO_PROXY) || '127.0.0.1,localhost' }}
+
+      - name: Prepare self-hosted Node
+        run: |
+          node -v
+          npm -v
+          pnpm -v
+
+      - name: Prepare Docker build proxy
+        run: |
+          {
+            printf 'HTTP_PROXY=%s\n' "${SELF_HOSTED_HTTP_PROXY:-${HTTP_PROXY:-}}"
+            printf 'HTTPS_PROXY=%s\n' "${SELF_HOSTED_HTTPS_PROXY:-${HTTPS_PROXY:-}}"
+            printf 'http_proxy=%s\n' "${SELF_HOSTED_HTTP_PROXY:-${http_proxy:-}}"
+            printf 'https_proxy=%s\n' "${SELF_HOSTED_HTTPS_PROXY:-${https_proxy:-}}"
+            printf 'NO_PROXY=%s\n' "127.0.0.1,localhost${SELF_HOSTED_NO_PROXY:+,$SELF_HOSTED_NO_PROXY}"
+            printf 'no_proxy=%s\n' "127.0.0.1,localhost${SELF_HOSTED_NO_PROXY:+,$SELF_HOSTED_NO_PROXY}"
+            printf 'DOCKER_BUILD_NETWORK=host\n'
+          } >> "$GITHUB_ENV"
+          python scripts/select_free_docker_subnet.py --seed "$GITHUB_RUN_ID" >> "$GITHUB_ENV"
+
+      - name: Validate Helm chart
+        run: |
+          docker run --rm -v "$PWD:/work" -w /work alpine/helm@sha256:aef9b56f64e866207d9591d0abd8f6d767b36aadd12edf68f8a719716d9d29c9 lint deploy/helm/ordo
+          docker run --rm -v "$PWD:/work" -w /work alpine/helm@sha256:aef9b56f64e866207d9591d0abd8f6d767b36aadd12edf68f8a719716d9d29c9 template ordo deploy/helm/ordo >/dev/null
+          for values in deploy/helm/ordo/examples/*.yaml; do
+            docker run --rm -v "$PWD:/work" -w /work alpine/helm@sha256:aef9b56f64e866207d9591d0abd8f6d767b36aadd12edf68f8a719716d9d29c9 \
+              template ordo deploy/helm/ordo -f "$values" >/dev/null
+          done
+
+      - name: Build backend image
+        run: |
+          docker build --network host \
+            --build-arg HTTP_PROXY --build-arg HTTPS_PROXY --build-arg NO_PROXY \
+            -t ordo-backend -f docker/Dockerfile .
+
+      - name: Build web image
+        run: |
+          docker build --network host \
+            --build-arg HTTP_PROXY --build-arg HTTPS_PROXY --build-arg NO_PROXY \
+            --build-arg NEXT_PUBLIC_API_URL=/ \
+            -t ordo-web -f web/Dockerfile.prod web
+
+      - name: Install JWT browser smoke dependencies
+        working-directory: web
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm exec playwright install chromium
+
+      - name: README docker quickstart smoke
+        env:
+          API_HEALTHCHECK_START_PERIOD: "420s"
+          BACKEND_PORT: "0"
+          COMPOSE_PROJECT_NAME: ordo-readme-${{ github.run_id }}-${{ github.run_attempt }}
+          EMBEDDING_MODEL_DOCKER: ordo-deterministic-test-v1
+          EMBEDDING_PROVIDER_DOCKER: deterministic_test
+          MARKDOWN_IMAGE_PROXY_SECRET: ci-markdown-image-proxy-secret
+          WEB_PORT: "0"
+        run: |
+          mkdir -p artifacts
+          compose=(docker compose --project-name "$COMPOSE_PROJECT_NAME" --env-file .env -f docker/docker-compose.yml -f docker/docker-compose.web.yml)
+          make up-web
+          api_port=$("${compose[@]}" port ordo-api 8000 | head -n 1 | sed 's/.*://')
+          [[ "$api_port" =~ ^[0-9]+$ ]]
+          make core-e2e \
+            CORE_E2E_BASE_URL=http://127.0.0.1:$api_port \
+            CORE_E2E_BOOTSTRAP_REGISTER=1 \
+            CORE_E2E_OUT=artifacts/core-e2e.readme-docker.json
+
+      - name: Diagnose README docker quickstart failure
+        if: failure()
+        env:
+          BACKEND_PORT: "0"
+          COMPOSE_PROJECT_NAME: ordo-readme-${{ github.run_id }}-${{ github.run_attempt }}
+          EMBEDDING_MODEL_DOCKER: ordo-deterministic-test-v1
+          EMBEDDING_PROVIDER_DOCKER: deterministic_test
+          WEB_PORT: "0"
+        run: |
+          compose=(docker compose --project-name "$COMPOSE_PROJECT_NAME" --env-file .env -f docker/docker-compose.yml -f docker/docker-compose.web.yml)
+          "${compose[@]}" ps
+          "${compose[@]}" logs --tail=300 ordo-api ordo-worker
+
+      - name: Clean up README docker quickstart stack
+        if: always()
+        env:
+          BACKEND_PORT: "0"
+          COMPOSE_PROJECT_NAME: ordo-readme-${{ github.run_id }}-${{ github.run_attempt }}
+          WEB_PORT: "0"
+        run: docker compose --env-file .env -f docker/docker-compose.yml -f docker/docker-compose.web.yml down -v --remove-orphans
+
+      - name: README lite quickstart smoke
+        env:
+          BACKEND_PORT: "0"
+          COMPOSE_PROJECT_NAME: ordo-lite-${{ github.run_id }}-${{ github.run_attempt }}
+        run: |
+          mkdir -p artifacts
+          compose=(docker compose --project-name "$COMPOSE_PROJECT_NAME" --env-file .env -f docker/docker-compose.lite.yml)
+          make up-lite
+          api_port=$("${compose[@]}" port ordo-api 8000 | head -n 1 | sed 's/.*://')
+          [[ "$api_port" =~ ^[0-9]+$ ]]
+          for i in $(seq 1 60); do
+            if curl --noproxy '*' -fsS http://127.0.0.1:$api_port/api/v1/health/ready >/dev/null; then
+              break
+            fi
+            if [ "$i" -eq 60 ]; then
+              "${compose[@]}" ps
+              "${compose[@]}" logs --tail=200 ordo-api ordo-worker ordo-postgres ordo-redis
+              exit 1
+            fi
+            sleep 5
+          done
+          make core-e2e \
+            CORE_E2E_BASE_URL=http://127.0.0.1:$api_port \
+            CORE_E2E_BOOTSTRAP_REGISTER=1 \
+            CORE_E2E_OUT=artifacts/core-e2e.readme-lite.json
+
+      - name: Clean up README lite quickstart stack
+        if: always()
+        env:
+          BACKEND_PORT: "0"
+          COMPOSE_PROJECT_NAME: ordo-lite-${{ github.run_id }}-${{ github.run_attempt }}
+        run: docker compose --env-file .env -f docker/docker-compose.lite.yml down -v --remove-orphans
+
+      - name: Smoke built backend and web images
+        env:
+          BACKEND_PORT: "0"
+          COMPOSE_PROJECT_NAME: ordo-ci-${{ github.run_id }}-${{ github.run_attempt }}
+          MARKDOWN_IMAGE_PROXY_SECRET: ci-markdown-image-proxy-secret
+          ORDO_BACKEND_IMAGE: ordo-backend
+        run: |
+          compose=(docker compose -f docker/docker-compose.retrieval-dev.yml)
+          if ! "${compose[@]}" up -d --no-build --wait --wait-timeout 300; then
+            "${compose[@]}" ps
+            "${compose[@]}" logs --tail=200 ordo-api
+            exit 1
+          fi
+
+          web_name="ordo-web-smoke-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          docker run -d --name "$web_name" \
+            -p 127.0.0.1::3000 \
+            --network "${COMPOSE_PROJECT_NAME}_default" \
+            -e HOST=0.0.0.0 \
+            -e API_INTERNAL_URL=http://ordo-api:8000 \
+            -e MARKDOWN_IMAGE_PROXY_SECRET \
+            ordo-web
+          for _ in {1..30}; do
+            if docker exec "$web_name" wget -Y off -qO- http://127.0.0.1:3000/ >/dev/null; then
+              exit 0
+            fi
+            sleep 2
+          done
+          docker logs "$web_name"
+          exit 1
+
+      - name: JWT built-web browser smoke
+        env:
+          ORDO_WEB_CONTAINER: ordo-web-smoke-${{ github.run_id }}-${{ github.run_attempt }}
+        run: bash scripts/run_ci_jwt_browser_smoke.sh
+
+      - name: Docker web-proxy and dual-api core smoke
+        env:
+          BACKEND_PORT: "0"
+          COMPOSE_PROJECT_NAME: ordo-ci-${{ github.run_id }}-${{ github.run_attempt }}
+          ORDO_BACKEND_IMAGE: ordo-backend
+        run: |
+          mkdir -p artifacts
+          api2_name="ordo-api-secondary-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          trap 'docker rm -f "$api2_name" >/dev/null 2>&1 || true' EXIT
+          docker compose -f docker/docker-compose.retrieval-dev.yml run -d \
+            --name "$api2_name" --no-deps ordo-api
+          docker compose -f docker/docker-compose.retrieval-dev.yml run --rm --no-deps -T \
+            -e ORDO_SMOKE_IDENTIFIER \
+            -e ORDO_SMOKE_PASSWORD \
+            -v "$PWD:/work" -w /work ordo-api \
+            python scripts/smoke_test.py \
+              --base-url http://ordo-web-smoke-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}:3000 \
+              --web-base-url http://ordo-web-smoke-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}:3000 \
+              --secondary-base-url http://$api2_name:8000 \
+              --core-only \
+              --out artifacts/core-e2e.web-dual-api.json
+
+      - name: Clean up image smoke stack
+        if: always()
+        env:
+          BACKEND_PORT: "0"
+          COMPOSE_PROJECT_NAME: ordo-ci-${{ github.run_id }}-${{ github.run_attempt }}
+          ORDO_BACKEND_IMAGE: ordo-backend
+        run: |
+          docker rm -f "ordo-web-smoke-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" || true
+          docker compose -f docker/docker-compose.retrieval-dev.yml down -v --remove-orphans
+
+      - name: Docker live core release gate
+        env:
+          BACKEND_PORT: "0"
+          COMPOSE_PROJECT_NAME: ordo-ci-live-${{ github.run_id }}-${{ github.run_attempt }}
+          ORDO_BACKEND_IMAGE: ordo-backend
+          AUTH_MODE_RETRIEVAL_DEV: header
+          UPLOAD_DEDUP_ENABLED_RETRIEVAL_DEV: "true"
+          RAG_RETRIEVAL_DISTRIBUTED_ADMISSION_ENABLED_RETRIEVAL_DEV: "true"
+          RAG_RETRIEVAL_DISTRIBUTED_ADMISSION_MAX_CONCURRENCY_RETRIEVAL_DEV: "3"
+          RAG_RETRIEVAL_OFFLOAD_MAX_CONCURRENCY_RETRIEVAL_DEV: "3"
+          DATASET_ANALYSIS_PNG_STALE_AFTER_SEC_RETRIEVAL_DEV: "2"
+        run: |
+          mkdir -p artifacts
+          compose=(docker compose -f docker/docker-compose.retrieval-dev.yml)
+          api2_name="ordo-api-live-secondary-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          trap 'docker rm -f "$api2_name" >/dev/null 2>&1 || true' EXIT
+          if ! "${compose[@]}" up -d --no-build --wait --wait-timeout 300; then
+            "${compose[@]}" ps
+            "${compose[@]}" logs --tail=200 ordo-api
+            exit 1
+          fi
+          docker compose -f docker/docker-compose.retrieval-dev.yml run -d \
+            --name "$api2_name" --no-deps ordo-api
+          "${compose[@]}" run --rm --no-deps -T \
+            -v "$PWD:/work" -w /work ordo-api \
+            python scripts/seed_ci_retrieval_regression.py \
+              --membership-only \
+              --tenant-id 11111111-1111-1111-1111-111111111111 \
+              --tenant-id 22222222-2222-2222-2222-222222222222 \
+              --account-id ci-live-gate
+          "${compose[@]}" run --rm --no-deps -T \
+            -v "$PWD:/work" -w /work ordo-api \
+            python scripts/live_core_release_gate.py \
+              --base-url http://ordo-api:8000 \
+              --secondary-base-url http://$api2_name:8000 \
+              --tenant-id 11111111-1111-1111-1111-111111111111 \
+              --secondary-tenant-id 22222222-2222-2222-2222-222222222222 \
+              --user-id ci-live-gate \
+              --out artifacts/live-core-release-gate.docker.json
+
+      - name: Clean up live core release gate stack
+        if: always()
+        env:
+          BACKEND_PORT: "0"
+          COMPOSE_PROJECT_NAME: ordo-ci-live-${{ github.run_id }}-${{ github.run_attempt }}
+          ORDO_BACKEND_IMAGE: ordo-backend
+          AUTH_MODE_RETRIEVAL_DEV: header
+          UPLOAD_DEDUP_ENABLED_RETRIEVAL_DEV: "true"
+          RAG_RETRIEVAL_DISTRIBUTED_ADMISSION_ENABLED_RETRIEVAL_DEV: "true"
+          RAG_RETRIEVAL_DISTRIBUTED_ADMISSION_MAX_CONCURRENCY_RETRIEVAL_DEV: "3"
+          RAG_RETRIEVAL_OFFLOAD_MAX_CONCURRENCY_RETRIEVAL_DEV: "3"
+          DATASET_ANALYSIS_PNG_STALE_AFTER_SEC_RETRIEVAL_DEV: "2"
+        run: docker compose -f docker/docker-compose.retrieval-dev.yml down -v --remove-orphans
+
+  retrieval-only-bounded-gate:
+    runs-on: [self-hosted, Linux, X64, ordo]
+    timeout-minutes: 60
+    env:
+      ENV: ci
+      AUTH_MODE: header
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          clean: true
+        env:
+          http_proxy: ${{ vars.CI_HTTP_PROXY || '' }}
+          https_proxy: ${{ vars.CI_HTTPS_PROXY || '' }}
+          no_proxy: ${{ vars.CI_NO_PROXY != '' && format('127.0.0.1,localhost,{0}', vars.CI_NO_PROXY) || '127.0.0.1,localhost' }}
+
+      - name: Prepare self-hosted Python
+        if: ${{ runner.environment == 'self-hosted' }}
+        run: bash scripts/prepare_self_hosted_ci.sh --include-torch-wheel-dir
+
+      - name: Install Python deps
+        run: |
+          mkdir -p "$PIP_CACHE_DIR" "$TORCH_WHEEL_DIR"
+          python -m pip install --upgrade pip
+          python ci/download_verified_wheels.py --cache-dir "$TORCH_WHEEL_DIR"
+          python -m pip install --retries 5 --timeout 120 \
+            "$TORCH_WHEEL_DIR/torch-2.13.0+cpu-cp311-cp311-manylinux_2_28_x86_64.whl" \
+            "$TORCH_WHEEL_DIR/torchvision-0.28.0+cpu-cp311-cp311-manylinux_2_28_x86_64.whl"
+          python -m pip install --retries 10 --timeout 120 -r requirements.txt
+
+      - name: Validate query-set health policy config
+        run: |
+          mkdir -p artifacts
+          python scripts/validate_queryset_health_policy.py \
+            --policy ci/queryset_health_policy.v1.json \
+            --out artifacts/queryset_health_policy.normalized.json
+
+      - name: Run deterministic sample retrieval benchmark
+        env:
+          LLM_MOCK_ENABLED: "true"
+        run: |
+          mkdir -p artifacts
+          python scripts/run_sample_retrieval_benchmark.py \
+            --fixture data/sample/retrieval_fixture_v1.json \
+            --out artifacts/sample_retrieval_bench.json \
+            --retrieval-mode keyword \
+            --top-k 5
+
+      - name: Run deterministic sample retrieval benchmark (hybrid bounded fixture)
+        env:
+          LLM_MOCK_ENABLED: "true"
+        run: |
+          mkdir -p artifacts
+          python scripts/run_sample_retrieval_benchmark.py \
+            --fixture data/sample/retrieval_fixture_hybrid_v1.json \
+            --out artifacts/sample_retrieval_bench.hybrid.json \
+            --retrieval-mode hybrid \
+            --top-k 5
+
+      - name: Run deterministic sample retrieval benchmark (sparse bounded fixture)
+        env:
+          LLM_MOCK_ENABLED: "true"
+        run: |
+          mkdir -p artifacts
+          python scripts/run_sample_retrieval_benchmark.py \
+            --fixture data/sample/retrieval_fixture_sparse_v1.json \
+            --out artifacts/sample_retrieval_bench.sparse.json \
+            --retrieval-mode keyword \
+            --top-k 5 \
+            --enable-sparse-retrieval \
+            --sparse-retrieval-provider deterministic
+
+      - name: Run deterministic sample retrieval benchmark (colbert bounded fixture)
+        env:
+          LLM_MOCK_ENABLED: "true"
+        run: |
+          mkdir -p artifacts
+          python scripts/run_sample_retrieval_benchmark.py \
+            --fixture data/sample/retrieval_fixture_colbert_v1.json \
+            --out artifacts/sample_retrieval_bench.colbert.json \
+            --retrieval-mode vector \
+            --top-k 5 \
+            --enable-colbert-retrieval \
+            --colbert-retrieval-provider deterministic
+
+      - name: Run sample broader parsing proof sweep
+        env:
+          LLM_MOCK_ENABLED: "true"
+        run: |
+          mkdir -p artifacts/parsing_proof_broader_sample
+          python scripts/run_sample_parsing_retrieval_proof.py \
+            --out-dir artifacts/parsing_proof_broader_sample
+
+      - name: Evaluate broader parsing proof thresholds
+        run: |
+          python scripts/parsing_retrieval_proof_gate.py \
+            --input artifacts/parsing_proof_broader_sample/summary.json \
+            --thresholds ci/parsing_retrieval_proof_thresholds.v1.json \
+            --out artifacts/parsing_proof_broader_sample/gate.json
+
+      - name: Build broader parsing proof diff artifacts
+        run: |
+          python scripts/diff_parsing_retrieval_proof_summaries.py \
+            --a ci/parsing_retrieval_proof_summary_baseline.v1.json \
+            --b artifacts/parsing_proof_broader_sample/summary.json \
+            --out artifacts/parsing_proof_broader_sample/diff.json \
+            --out-md artifacts/parsing_proof_broader_sample/diff.md
+
+      - name: Build query-set health snapshot from bounded benchmark
+        run: |
+          python scripts/run_queryset_health_diagnostics.py \
+            --benchmark-report artifacts/sample_retrieval_bench.json \
+            --out artifacts/queryset_health.snapshot.json \
+            --history artifacts/queryset_health.history.jsonl \
+            --policy-json ci/queryset_health_policy.v1.json \
+            --cron | tee artifacts/queryset_health.cron.json
+
+      - name: Build query-set health snapshot from bounded hybrid benchmark
+        run: |
+          python scripts/run_queryset_health_diagnostics.py \
+            --benchmark-report artifacts/sample_retrieval_bench.hybrid.json \
+            --out artifacts/queryset_health.snapshot.hybrid.json \
+            --history artifacts/queryset_health.history.hybrid.jsonl \
+            --policy-json ci/queryset_health_policy.v1.json \
+            --cron | tee artifacts/queryset_health.cron.hybrid.json
+
+      - name: Build query-set health snapshot from bounded sparse benchmark
+        run: |
+          python scripts/run_queryset_health_diagnostics.py \
+            --benchmark-report artifacts/sample_retrieval_bench.sparse.json \
+            --out artifacts/queryset_health.snapshot.sparse.json \
+            --history artifacts/queryset_health.history.sparse.jsonl \
+            --policy-json ci/queryset_health_policy.v1.json \
+            --cron | tee artifacts/queryset_health.cron.sparse.json
+
+      - name: Build query-set health diff artifacts
+        run: |
+          python scripts/diff_queryset_health_snapshots.py \
+            --a ci/queryset_health_snapshot_baseline.v1.json \
+            --b artifacts/queryset_health.snapshot.json \
+            --out artifacts/queryset_health.diff.json \
+            --out-md artifacts/queryset_health.diff.md
+
+      - name: Build query-set health diff artifacts (hybrid)
+        run: |
+          python scripts/diff_queryset_health_snapshots.py \
+            --a ci/queryset_health_snapshot_hybrid_baseline.v1.json \
+            --b artifacts/queryset_health.snapshot.hybrid.json \
+            --out artifacts/queryset_health.diff.hybrid.json \
+            --out-md artifacts/queryset_health.diff.hybrid.md
+
+      - name: Build query-set health diff artifacts (sparse)
+        run: |
+          python scripts/diff_queryset_health_snapshots.py \
+            --a ci/queryset_health_snapshot_sparse_baseline.v1.json \
+            --b artifacts/queryset_health.snapshot.sparse.json \
+            --out artifacts/queryset_health.diff.sparse.json \
+            --out-md artifacts/queryset_health.diff.sparse.md
+
+      - name: Run parse_bench strict gate (docs slice)
+        run: |
+          mkdir -p artifacts
+          python -m app.rag.evaluation.parse_bench run \
+            --input-dir tests/fixtures/parsing_golden \
+            --manifest tests/fixtures/parsing_golden/manifest.json \
+            --parsers basic \
+            --max-files 8 \
+            --out artifacts/parser_benchmark.current.json \
+            --baseline ci/parser_benchmark_baseline.v1.json \
+            --strict-profile ci/parser_strict_profile.v1.json \
+            --strict
+
+      - name: Build parser benchmark diff artifact
+        if: always()
+        run: |
+          python - <<'PY'
+          from __future__ import annotations
+
+          import json
+          from pathlib import Path
+
+          report_path = Path("artifacts/parser_benchmark.current.json")
+          out_path = Path("artifacts/parser_benchmark.diff.json")
+          out_md = Path("artifacts/parser_benchmark.diff.md")
+
+          if not report_path.exists():
+              out_path.write_text(json.dumps({"missing_report": True}, ensure_ascii=False, indent=2), encoding="utf-8")
+              out_md.write_text("# Parser Benchmark Diff\n\nreport missing\n", encoding="utf-8")
+              raise SystemExit(0)
+
+          report = json.loads(report_path.read_text(encoding="utf-8"))
+          payload = {
+              "schema": "ordo.parser_benchmark_diff.v1",
+              "baseline": report.get("baseline"),
+              "strict_gate": report.get("strict_gate"),
+              "regressions": report.get("regressions"),
+              "regression_severity": report.get("regression_severity"),
+              "summary": report.get("summary"),
+          }
+          out_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+
+          strict_gate = payload.get("strict_gate") if isinstance(payload.get("strict_gate"), dict) else {}
+          regressions = payload.get("regressions") if isinstance(payload.get("regressions"), dict) else {}
+          severity = payload.get("regression_severity") if isinstance(payload.get("regression_severity"), dict) else {}
+          levels = severity.get("levels") if isinstance(severity.get("levels"), dict) else {}
+          lines = [
+              "# Parser Benchmark Diff",
+              "",
+              f"- Strict Gate Passed: `{bool(strict_gate.get('passed'))}`",
+              f"- Baseline: `{payload.get('baseline')}`",
+              f"- Changed Backends: `{len(list((regressions.get('by_backend') or {}).keys()))}`",
+              f"- Severity Critical: `{int(levels.get('critical', 0) or 0)}`",
+              f"- Severity High: `{int(levels.get('high', 0) or 0)}`",
+          ]
+          out_md.write_text("\n".join(lines) + "\n", encoding="utf-8")
+          PY
+
+      - name: Generate adaptive router policy artifact
+        if: always()
+        run: |
+          python scripts/generate_adaptive_router_policy.py \
+            --benchmark-report artifacts/sample_retrieval_bench.json \
+            --out artifacts/adaptive_router_policy.v1.json
+
+      - name: Generate channel budget policy artifact
+        if: always()
+        run: |
+          python scripts/generate_channel_budget_policy.py \
+            --benchmark-report artifacts/sample_retrieval_bench.json \
+            --hybrid-report artifacts/sample_retrieval_bench.hybrid.json \
+            --sparse-report artifacts/sample_retrieval_bench.sparse.json \
+            --colbert-report artifacts/sample_retrieval_bench.colbert.json \
+            --out artifacts/channel_budget_policy.v1.json
+
+      - name: Export intent router training artifact
+        if: always()
+        run: |
+          python scripts/export_intent_router_training.py \
+            --input artifacts/sample_retrieval_bench.json \
+            --out artifacts/intent_router_training.v1.json
+
+      - name: Generate intent router model artifact
+        if: always()
+        run: |
+          python scripts/generate_intent_router_model.py \
+            --input artifacts/intent_router_training.v1.json \
+            --out artifacts/intent_router_model.v1.json
+
+      - name: Build deterministic retrieval-ranking proxy artifact
+        if: always()
+        run: |
+          python scripts/build_rag_quality_gate_artifacts.py \
+            --benchmark artifacts/sample_retrieval_bench.json \
+            --summary-out artifacts/retrieval_ranking_proxy.summary.json \
+            --report-out artifacts/retrieval_ranking_proxy_gate.report.json
+
+      - name: Build multi-hop diagnostics summary artifact
+        if: always()
+        run: |
+          python - <<'PY'
+          from __future__ import annotations
+
+          import json
+          from pathlib import Path
+
+          bench_path = Path("artifacts/sample_retrieval_bench.hybrid.json")
+          report = json.loads(bench_path.read_text(encoding="utf-8")) if bench_path.exists() else {}
+          summary = report.get("summary") if isinstance(report.get("summary"), dict) else {}
+
+          payload = {
+              "schema": "ordo.multihop_diagnostics_summary.v1",
+              "source": str(bench_path),
+              "summary": {
+                  "multihop_path_completeness": summary.get("multihop_path_completeness"),
+                  "multihop_order_consistency": summary.get("multihop_order_consistency"),
+                  "multihop_chain_hit_rate": summary.get("multihop_chain_hit_rate"),
+              },
+          }
+          out = Path("artifacts/multihop_diagnostics.summary.json")
+          out.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+          PY
+
+      - name: Evaluate bounded retrieval-only gate (metric delta output)
+        run: |
+          python - <<'PY'
+          from __future__ import annotations
+
+          import json
+          import sys
+          from pathlib import Path
+
+          report = json.loads(Path("artifacts/sample_retrieval_bench.json").read_text(encoding="utf-8"))
+          cfg = json.loads(Path("ci/retrieval_thresholds.v2.json").read_text(encoding="utf-8"))
+          bounded = cfg.get("ci_retrieval_only_bounded_gate") if isinstance(cfg, dict) else {}
+          thresholds = bounded.get("thresholds") if isinstance(bounded, dict) else {}
+          summary = report.get("summary") if isinstance(report.get("summary"), dict) else {}
+
+          failures = []
+          for metric, raw in (thresholds or {}).items():
+              if not isinstance(raw, dict):
+                  continue
+              try:
+                  value = float(summary.get(metric))
+              except Exception:
+                  value = None
+              if value is None:
+                  failures.append((metric, "missing", raw, None))
+                  continue
+              if "min" in raw:
+                  low = float(raw["min"])
+                  if value < low:
+                      failures.append((metric, value, {"min": low}, value - low))
+              if "max" in raw:
+                  high = float(raw["max"])
+                  if value > high:
+                      failures.append((metric, value, {"max": high}, value - high))
+
+          if failures:
+              print("[retrieval-only-bounded-gate] FAIL: threshold violation(s)", file=sys.stderr)
+              for metric, value, th, delta in failures:
+                  print(
+                      f"[retrieval-only-bounded-gate] metric={metric} value={value} threshold={th} delta={delta}",
+                      file=sys.stderr,
+                  )
+              raise SystemExit(1)
+
+          print("[retrieval-only-bounded-gate] PASS")
+          PY
+
+      - name: Evaluate bounded retrieval-only gate (hybrid metric delta output)
+        run: |
+          python - <<'PY'
+          from __future__ import annotations
+
+          import json
+          import sys
+          from pathlib import Path
+
+          report = json.loads(Path("artifacts/sample_retrieval_bench.hybrid.json").read_text(encoding="utf-8"))
+          cfg = json.loads(Path("ci/retrieval_thresholds.v2.json").read_text(encoding="utf-8"))
+          bounded = cfg.get("ci_retrieval_only_bounded_gate_hybrid") if isinstance(cfg, dict) else {}
+          thresholds = bounded.get("thresholds") if isinstance(bounded, dict) else {}
+          summary = report.get("summary") if isinstance(report.get("summary"), dict) else {}
+
+          failures = []
+          for metric, raw in (thresholds or {}).items():
+              if not isinstance(raw, dict):
+                  continue
+              try:
+                  value = float(summary.get(metric))
+              except Exception:
+                  value = None
+              if value is None:
+                  failures.append((metric, "missing", raw, None))
+                  continue
+              if "min" in raw:
+                  low = float(raw["min"])
+                  if value < low:
+                      failures.append((metric, value, {"min": low}, value - low))
+              if "max" in raw:
+                  high = float(raw["max"])
+                  if value > high:
+                      failures.append((metric, value, {"max": high}, value - high))
+
+          if failures:
+              print("[retrieval-only-bounded-gate-hybrid] FAIL: threshold violation(s)", file=sys.stderr)
+              for metric, value, th, delta in failures:
+                  print(
+                      f"[retrieval-only-bounded-gate-hybrid] metric={metric} value={value} threshold={th} delta={delta}",
+                      file=sys.stderr,
+                  )
+              raise SystemExit(1)
+
+          print("[retrieval-only-bounded-gate-hybrid] PASS")
+          PY
+
+      - name: Evaluate bounded retrieval-only gate (sparse metric delta output)
+        run: |
+          python - <<'PY'
+          from __future__ import annotations
+
+          import json
+          import sys
+          from pathlib import Path
+
+          report = json.loads(Path("artifacts/sample_retrieval_bench.sparse.json").read_text(encoding="utf-8"))
+          cfg = json.loads(Path("ci/retrieval_thresholds.v2.json").read_text(encoding="utf-8"))
+          bounded = cfg.get("ci_retrieval_only_bounded_gate_sparse") if isinstance(cfg, dict) else {}
+          thresholds = bounded.get("thresholds") if isinstance(bounded, dict) else {}
+          summary = report.get("summary") if isinstance(report.get("summary"), dict) else {}
+
+          runtime = report.get("runtime") if isinstance(report.get("runtime"), dict) else {}
+          provider = str(runtime.get("sparse_retrieval_provider") or "").strip().lower()
+          if not bool(runtime.get("sparse_retrieval_enabled")) or provider != "deterministic":
+              print("[retrieval-only-bounded-gate-sparse] FAIL: sparse runtime metadata mismatch", file=sys.stderr)
+              print(
+                  f"[retrieval-only-bounded-gate-sparse] runtime={runtime}",
+                  file=sys.stderr,
+              )
+              raise SystemExit(1)
+
+          failures = []
+          for metric, raw in (thresholds or {}).items():
+              if not isinstance(raw, dict):
+                  continue
+              try:
+                  value = float(summary.get(metric))
+              except Exception:
+                  value = None
+              if value is None:
+                  failures.append((metric, "missing", raw, None))
+                  continue
+              if "min" in raw:
+                  low = float(raw["min"])
+                  if value < low:
+                      failures.append((metric, value, {"min": low}, value - low))
+              if "max" in raw:
+                  high = float(raw["max"])
+                  if value > high:
+                      failures.append((metric, value, {"max": high}, value - high))
+
+          if failures:
+              print("[retrieval-only-bounded-gate-sparse] FAIL: threshold violation(s)", file=sys.stderr)
+              for metric, value, th, delta in failures:
+                  print(
+                      f"[retrieval-only-bounded-gate-sparse] metric={metric} value={value} threshold={th} delta={delta}",
+                      file=sys.stderr,
+                  )
+              raise SystemExit(1)
+
+          print("[retrieval-only-bounded-gate-sparse] PASS")
+          PY
+
+      - name: Evaluate bounded retrieval-only gate (colbert metric delta output)
+        run: |
+          python - <<'PY'
+          from __future__ import annotations
+
+          import json
+          import sys
+          from pathlib import Path
+
+          report = json.loads(Path("artifacts/sample_retrieval_bench.colbert.json").read_text(encoding="utf-8"))
+          cfg = json.loads(Path("ci/retrieval_thresholds.v2.json").read_text(encoding="utf-8"))
+          bounded = cfg.get("ci_retrieval_only_bounded_gate_colbert") if isinstance(cfg, dict) else {}
+          thresholds = bounded.get("thresholds") if isinstance(bounded, dict) else {}
+          summary = report.get("summary") if isinstance(report.get("summary"), dict) else {}
+
+          runtime = report.get("runtime") if isinstance(report.get("runtime"), dict) else {}
+          provider = str(runtime.get("colbert_retrieval_provider") or "").strip().lower()
+          if not bool(runtime.get("colbert_retrieval_enabled")) or provider != "deterministic":
+              print("[retrieval-only-bounded-gate-colbert] FAIL: colbert runtime metadata mismatch", file=sys.stderr)
+              print(
+                  f"[retrieval-only-bounded-gate-colbert] runtime={runtime}",
+                  file=sys.stderr,
+              )
+              raise SystemExit(1)
+
+          failures = []
+          for metric, raw in (thresholds or {}).items():
+              if not isinstance(raw, dict):
+                  continue
+              try:
+                  value = float(summary.get(metric))
+              except Exception:
+                  value = None
+              if value is None:
+                  failures.append((metric, "missing", raw, None))
+                  continue
+              if "min" in raw:
+                  low = float(raw["min"])
+                  if value < low:
+                      failures.append((metric, value, {"min": low}, value - low))
+              if "max" in raw:
+                  high = float(raw["max"])
+                  if value > high:
+                      failures.append((metric, value, {"max": high}, value - high))
+
+          if failures:
+              print("[retrieval-only-bounded-gate-colbert] FAIL: threshold violation(s)", file=sys.stderr)
+              for metric, value, th, delta in failures:
+                  print(
+                      f"[retrieval-only-bounded-gate-colbert] metric={metric} value={value} threshold={th} delta={delta}",
+                      file=sys.stderr,
+                  )
+              raise SystemExit(1)
+
+          print("[retrieval-only-bounded-gate-colbert] PASS")
+          PY
+
+      - name: Validate grounded_strict retrieval-profile contract
+        run: |
+          python - <<'PY'
+          from __future__ import annotations
+
+          import json
+          import sys
+          from pathlib import Path
+
+          from app.rag.core.retrieval_profiles import apply_retrieval_profile_overrides
+
+          configured_reranker_provider = "llm"
+          applied = apply_retrieval_profile_overrides(
+              profile="grounded_strict",
+              top_k=5,
+              score_threshold=0.3,
+              retrieval_mode="keyword",
+              enable_reranker=False,
+              reranker_provider=configured_reranker_provider,
+              reranker_top_n=5,
+              enable_weight_rerank=True,
+              retrieval_contract_mode="",
+              visible_evidence_only=False,
+          )
+          fallback_applied = apply_retrieval_profile_overrides(
+              profile="grounded_strict",
+              top_k=5,
+              score_threshold=0.3,
+              retrieval_mode="keyword",
+              enable_reranker=False,
+              reranker_provider="none",
+              reranker_top_n=5,
+              enable_weight_rerank=True,
+              retrieval_contract_mode="",
+              visible_evidence_only=False,
+          )
+
+          expected = {
+              "retrieval_mode": "hybrid",
+              "retrieval_contract_mode": "evidence_strict",
+              "visible_evidence_only": True,
+              "enable_reranker": True,
+              "reranker_provider": configured_reranker_provider,
+              "enable_weight_rerank": False,
+          }
+          failures = []
+          for key, expected_value in expected.items():
+              if applied.get(key) != expected_value:
+                  failures.append((key, applied.get(key), expected_value))
+
+          if int(applied.get("top_k") or 0) < 20:
+              failures.append(("top_k", applied.get("top_k"), ">=20"))
+          if int(applied.get("reranker_top_n") or 0) < 20:
+              failures.append(("reranker_top_n", applied.get("reranker_top_n"), ">=20"))
+          if fallback_applied.get("reranker_provider") != "cross_encoder":
+              failures.append(("fallback_reranker_provider", fallback_applied.get("reranker_provider"), "cross_encoder"))
+
+          out_path = Path("artifacts/retrieval_profile.grounded_strict.contract.json")
+          out_path.parent.mkdir(parents=True, exist_ok=True)
+          out_path.write_text(
+              json.dumps(
+                  {
+                      "schema": "ordo.retrieval_profile_contract.v1",
+                      "profile": "grounded_strict",
+                      "applied": applied,
+                      "fallback_applied": fallback_applied,
+                      "failures": failures,
+                  },
+                  ensure_ascii=False,
+                  sort_keys=True,
+                  indent=2,
+              ),
+              encoding="utf-8",
+          )
+
+          if failures:
+              print("[retrieval-profile-grounded-strict] FAIL", file=sys.stderr)
+              for key, value, expected_value in failures:
+                  print(
+                      f"[retrieval-profile-grounded-strict] key={key} value={value} expected={expected_value}",
+                      file=sys.stderr,
+                  )
+              raise SystemExit(1)
+
+          print("[retrieval-profile-grounded-strict] PASS")
+          PY
+
+      - name: Validate claim verifier diagnostics contract
+        run: |
+          python - <<'PY'
+          from __future__ import annotations
+
+          import json
+          import sys
+          from pathlib import Path
+
+          from app.rag.core.claim_verifier import verify_claim
+
+          cases = [
+              {
+                  "id": "supported",
+                  "claim": "Sky is blue.",
+                  "evidence": "The sky is blue due to Rayleigh scattering.",
+                  "mode": "token_overlap",
+                  "enable_contradiction_check": False,
+                  "expected_supported": True,
+                  "expected_reason_code": "supported",
+                  "expected_contradiction_type": None,
+              },
+              {
+                  "id": "numeric_mismatch",
+                  "claim": "Revenue exceeded 100 in 2025.",
+                  "evidence": "Revenue was 90 in 2025.",
+                  "mode": "semantic_heuristic",
+                  "enable_contradiction_check": True,
+                  "expected_supported": False,
+                  "expected_reason_code": "contradiction_numeric_mismatch",
+                  "expected_contradiction_type": "numeric_mismatch",
+              },
+              {
+                  "id": "negation_conflict",
+                  "claim": "The policy was not active in 2020.",
+                  "evidence": "The policy was active in 2020.",
+                  "mode": "semantic_heuristic",
+                  "enable_contradiction_check": True,
+                  "expected_supported": False,
+                  "expected_reason_code": "contradiction_negation_conflict",
+                  "expected_contradiction_type": "negation_conflict",
+              },
+          ]
+
+          failures = []
+          results = []
+          for case in cases:
+              res = verify_claim(
+                  case["claim"],
+                  case["evidence"],
+                  mode=case["mode"],
+                  enable_contradiction_check=case["enable_contradiction_check"],
+              )
+              diag = dict(getattr(res, "diagnostics", {}) or {})
+              results.append(
+                  {
+                      "id": case["id"],
+                      "supported": bool(getattr(res, "supported", False)),
+                      "diagnostics": diag,
+                  }
+              )
+              if bool(getattr(res, "supported", False)) != bool(case["expected_supported"]):
+                  failures.append((case["id"], "supported", getattr(res, "supported", None), case["expected_supported"]))
+              if str(diag.get("reason_code") or "") != str(case["expected_reason_code"] or ""):
+                  failures.append((case["id"], "reason_code", diag.get("reason_code"), case["expected_reason_code"]))
+              if diag.get("contradiction_type") != case["expected_contradiction_type"]:
+                  failures.append(
+                      (
+                          case["id"],
+                          "contradiction_type",
+                          diag.get("contradiction_type"),
+                          case["expected_contradiction_type"],
+                      )
+                  )
+
+          out_path = Path("artifacts/claim_verifier.contract.json")
+          out_path.parent.mkdir(parents=True, exist_ok=True)
+          out_path.write_text(
+              json.dumps(
+                  {
+                      "schema": "ordo.claim_verifier_contract.v1",
+                      "cases": results,
+                      "failures": failures,
+                  },
+                  ensure_ascii=False,
+                  sort_keys=True,
+                  indent=2,
+              ),
+              encoding="utf-8",
+          )
+
+          if failures:
+              print("[claim-verifier-contract] FAIL", file=sys.stderr)
+              for case_id, field, value, expected in failures:
+                  print(
+                      f"[claim-verifier-contract] case={case_id} field={field} value={value} expected={expected}",
+                      file=sys.stderr,
+                  )
+              raise SystemExit(1)
+
+          print("[claim-verifier-contract] PASS")
+          PY
+
+      - name: Upload bounded gate artifacts
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: retrieval-only-bounded-gate
+          path: |
+            artifacts/sample_retrieval_bench.json
+            artifacts/sample_retrieval_bench.hybrid.json
+            artifacts/sample_retrieval_bench.sparse.json
+            artifacts/sample_retrieval_bench.colbert.json
+            artifacts/queryset_health_policy.normalized.json
+            artifacts/queryset_health.snapshot.json
+            artifacts/parsing_proof_broader_sample/rollout.json
+            artifacts/parsing_proof_broader_sample/summary.json
+            artifacts/parsing_proof_broader_sample/report.json
+            artifacts/parsing_proof_broader_sample/gate.json
+            artifacts/parsing_proof_broader_sample/diff.json
+            artifacts/parsing_proof_broader_sample/diff.md
+            artifacts/parsing_proof_broader_sample/review.md
+            artifacts/queryset_health.snapshot.hybrid.json
+            artifacts/queryset_health.snapshot.sparse.json
+            artifacts/queryset_health.diff.json
+            artifacts/queryset_health.diff.md
+            artifacts/queryset_health.diff.hybrid.json
+            artifacts/queryset_health.diff.hybrid.md
+            artifacts/queryset_health.diff.sparse.json
+            artifacts/queryset_health.diff.sparse.md
+            artifacts/parser_benchmark.current.json
+            artifacts/parser_benchmark.diff.json
+            artifacts/parser_benchmark.diff.md
+            artifacts/retrieval_profile.grounded_strict.contract.json
+            artifacts/claim_verifier.contract.json
+            artifacts/queryset_health.history.jsonl
+            artifacts/queryset_health.history.hybrid.jsonl
+            artifacts/queryset_health.history.sparse.jsonl
+            artifacts/queryset_health.cron.json
+            artifacts/queryset_health.cron.hybrid.json
+            artifacts/queryset_health.cron.sparse.json
+            artifacts/adaptive_router_policy.v1.json
+            artifacts/channel_budget_policy.v1.json
+            artifacts/intent_router_training.v1.json
+            artifacts/intent_router_model.v1.json
+            artifacts/retrieval_ranking_proxy.summary.json
+            artifacts/retrieval_ranking_proxy_gate.report.json
+            artifacts/multihop_diagnostics.summary.json
+            ci/parser_benchmark_baseline.v1.json
+            ci/queryset_health_snapshot_baseline.v1.json
+            ci/queryset_health_snapshot_hybrid_baseline.v1.json
+            ci/queryset_health_snapshot_sparse_baseline.v1.json
+            ci/queryset_health_policy.v1.json
+            ci/retrieval_thresholds.v2.json
+
+  retrieval-regression-gate:
+    runs-on: [self-hosted, Linux, X64, ordo]
+    timeout-minutes: 60
+    needs:
+      - retrieval-only-bounded-gate
+    services:
+      postgres:
+        image: postgres:15
+        env:
+          POSTGRES_DB: ordo
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432/tcp
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          clean: true
+        env:
+          http_proxy: ${{ vars.CI_HTTP_PROXY || '' }}
+          https_proxy: ${{ vars.CI_HTTPS_PROXY || '' }}
+          no_proxy: ${{ vars.CI_NO_PROXY != '' && format('127.0.0.1,localhost,{0}', vars.CI_NO_PROXY) || '127.0.0.1,localhost' }}
+
+      - name: Prepare self-hosted Python
+        if: ${{ runner.environment == 'self-hosted' }}
+        run: bash scripts/prepare_self_hosted_ci.sh --include-torch-wheel-dir
+
+      - name: Install Python deps
+        run: |
+          mkdir -p "$PIP_CACHE_DIR"
+          python -m pip install --upgrade pip
+          python ci/download_verified_wheels.py --cache-dir "$TORCH_WHEEL_DIR"
+          python -m pip install --retries 5 --timeout 120 \
+            "$TORCH_WHEEL_DIR/torch-2.13.0+cpu-cp311-cp311-manylinux_2_28_x86_64.whl" \
+            "$TORCH_WHEEL_DIR/torchvision-0.28.0+cpu-cp311-cp311-manylinux_2_28_x86_64.whl"
+          python -m pip install --retries 10 --timeout 120 -r requirements.txt
+
+      - name: Prepare self-hosted Node
+        if: ${{ runner.environment == 'self-hosted' }}
+        run: |
+          node -v
+          npm -v
+          pnpm -v
+
+      - name: Install web deps
+        working-directory: web
+        run: pnpm install --frozen-lockfile
+
+      - name: Download bounded gate artifacts
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: retrieval-only-bounded-gate
+          path: bounded_gate_artifacts
+
+      - name: Allocate isolated host ports
+        run: |
+          port="$(python - <<'PY'
+          import socket
+
+          with socket.socket() as sock:
+              sock.bind(("127.0.0.1", 0))
+              print(sock.getsockname()[1])
+          PY
+          )"
+          echo "ORDO_RETRIEVAL_API_PORT=$port" >> "$GITHUB_ENV"
+
+      - name: Seed CI retrieval fixture (DB + cases bundle)
+        env:
+          DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:${{ job.services.postgres.ports['5432'] }}/ordo
+          ENV: ci
+          AUTH_MODE: header
+        run: |
+          mkdir -p artifacts
+          python scripts/seed_ci_retrieval_regression.py \
+            --fixture ci/retrieval_regression_fixture.v1.json \
+            --out-cases artifacts/regression_cases.json
+
+      - name: Start backend (no external deps)
+        env:
+          # Use the same DB seeded above.
+          DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:${{ job.services.postgres.ports['5432'] }}/ordo
+          # Ensure dev-friendly auth/membership auto-bootstrap.
+          ENV: ci
+          AUTH_MODE: header
+          SECRET_KEY: ci-retrieval-regression-secret-key-0123456789
+          DEFAULT_TENANT_ID: 00000000-0000-0000-0000-000000000000
+          # Keep /health/ready green without Milvus/Redis/MinIO.
+          VECTOR_BACKEND: faiss
+          TASK_QUEUE_ENABLED: "false"
+          EMBEDDING_CACHE_ENABLED: "false"
+          MINIO_ENABLED: "false"
+          # Keep lexical retrieval deterministic (no pg_trgm dependency in CI).
+          LEXICAL_DB_TRGM_ENABLED: "false"
+          # Exercise the real bounded hybrid stack with an offline-safe local reranker.
+          ENABLE_RERANKER: "true"
+          RERANKER_PROVIDER: pc
+          RERANKER_TOP_N: "20"
+          # Keep embeddings offline in CI; LLM mock alone does not affect embedding calls.
+          EMBEDDING_PROVIDER: deterministic_test
+          EMBEDDING_MODEL: ordo-deterministic-test-v1
+          BM25_INDEX_ENABLED: "true"
+          # Enable PII-safe metrics JSONL so we can also gate SLO + cost budgets.
+          ENABLE_METRICS_LOG: "true"
+          METRICS_LOG_PATH: artifacts/rag_metrics.jsonl
+          # Avoid any external LLM calls in CI (probe traffic uses mock responses).
+          LLM_MOCK_ENABLED: "true"
+        run: |
+          python -m uvicorn app.main:app --host 127.0.0.1 --port "$ORDO_RETRIEVAL_API_PORT" \
+            > artifacts/backend.log 2>&1 &
+          echo $! > artifacts/backend.pid
+
+      - name: Wait for backend ready
+        id: backend_ready
+        run: |
+          backend_pid="$(cat artifacts/backend.pid)"
+          for i in $(seq 1 120); do
+            if BACKEND_BASE_URL="http://127.0.0.1:${ORDO_RETRIEVAL_API_PORT}" python scripts/api_ping.py; then
+              exit 0
+            fi
+            if ! kill -0 "$backend_pid" 2>/dev/null; then
+              echo "backend exited before becoming ready" >&2
+              tail -200 artifacts/backend.log >&2
+              exit 1
+            fi
+            sleep 1
+          done
+          echo "backend not ready" >&2
+          tail -200 artifacts/backend.log >&2
+          exit 1
+
+      - name: README host web contract smoke
+        run: |
+          NEXT_PUBLIC_API_URL="http://127.0.0.1:${ORDO_RETRIEVAL_API_PORT}" \
+            node web/scripts/api-ping.mjs
+
+      - name: Install Playwright browsers for host browser smoke
+        if: ${{ runner.environment == 'self-hosted' }}
+        working-directory: web
+        run: pnpm exec playwright install chromium
+
+      - name: Allocate isolated browser port
+        run: |
+          port="$(python - <<'PY'
+          import socket
+
+          with socket.socket() as sock:
+              sock.bind(("127.0.0.1", 0))
+              print(sock.getsockname()[1])
+          PY
+          )"
+          echo "ORDO_RETRIEVAL_WEB_PORT=$port" >> "$GITHUB_ENV"
+
+      - name: README host browser smoke
+        working-directory: web
+        env:
+          NEXT_PUBLIC_USER_ID: ci-bot
+          NEXT_PUBLIC_TENANT_ID: 00000000-0000-0000-0000-000000000000
+          PLAYWRIGHT_LIVE_STACK: "1"
+          PLAYWRIGHT_USE_PROD_SERVER: "1"
+        run: |
+          NEXT_PUBLIC_API_URL="/" \
+          API_INTERNAL_URL="http://127.0.0.1:${ORDO_RETRIEVAL_API_PORT}" \
+          PLAYWRIGHT_PORT="$ORDO_RETRIEVAL_WEB_PORT" \
+            pnpm exec playwright test e2e/live-stack.smoke.spec.ts
+
+      - name: README host quickstart smoke
+        env:
+          NEXT_PUBLIC_USER_ID: ci-bot
+          NEXT_PUBLIC_TENANT_ID: 00000000-0000-0000-0000-000000000000
+        run: |
+          mkdir -p artifacts
+          make core-e2e \
+            CORE_E2E_BASE_URL="http://127.0.0.1:${ORDO_RETRIEVAL_API_PORT}" \
+            CORE_E2E_OUT=artifacts/core-e2e.retrieval-regression.json
+
+      - name: Run retrieval-only regression gate + generate candidate thresholds
+        env:
+          # Used by the backend process; keep env consistent for subprocesses.
+          DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:${{ job.services.postgres.ports['5432'] }}/ordo
+        run: |
+          python scripts/regression_gate.py \
+            --base-url "http://127.0.0.1:${ORDO_RETRIEVAL_API_PORT}/api/v1" \
+            --tenant-id 00000000-0000-0000-0000-000000000000 \
+            --user-id ci-bot \
+            --cases artifacts/regression_cases.json \
+            --metrics "" \
+            --thresholds ci/retrieval_thresholds.v2.json \
+            --retrieval-mode hybrid \
+            --out-run-json artifacts/run.detail.json \
+            --out-report-json artifacts/regression_gate.report.json \
+            --out-report-md artifacts/regression_gate.report.md \
+            --generate-thresholds-out artifacts/thresholds.generated.json
+
+      - name: Must-recall + provenance gate
+        run: |
+          python scripts/must_recall_provenance_gate.py \
+            --run-json artifacts/run.detail.json \
+            --must-recall-min 1.0 \
+            --provenance-min 1.0 \
+            --strict-integrity \
+            --out artifacts/must_recall_provenance_gate.report.json
+
+      - name: Release gate (SLO + cost budgets)
+        if: always() && steps.backend_ready.outcome == 'success'
+        env:
+          DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:${{ job.services.postgres.ports['5432'] }}/ordo
+        run: |
+          python scripts/release_gate.py \
+            --base-url "http://127.0.0.1:${ORDO_RETRIEVAL_API_PORT}/api/v1" \
+            --tenant-id 00000000-0000-0000-0000-000000000000 \
+            --user-id ci-bot \
+            --budgets ci/release_gate_budgets.v1.json \
+            --cases artifacts/regression_cases.json \
+            --probe-chat-requests 4 \
+            --probe-retrieval-mode hybrid \
+            --probe-timeout-sec 20 \
+            --queryset-health-snapshot bounded_gate_artifacts/artifacts/queryset_health.snapshot.json \
+            --queryset-health-snapshot-hybrid bounded_gate_artifacts/artifacts/queryset_health.snapshot.hybrid.json \
+            --queryset-health-diff bounded_gate_artifacts/artifacts/queryset_health.diff.json \
+            --queryset-health-diff-hybrid bounded_gate_artifacts/artifacts/queryset_health.diff.hybrid.json \
+            --parsing-proof-summary bounded_gate_artifacts/artifacts/parsing_proof_broader_sample/summary.json \
+            --parsing-proof-diff bounded_gate_artifacts/artifacts/parsing_proof_broader_sample/diff.json \
+            --skip-regression \
+            --out-report artifacts/release_gate.report.json \
+            --out-report-md artifacts/release_gate.report.md
+
+      - name: Diff thresholds (baseline vs generated)
+        if: always()
+        run: |
+          python - <<'PY'
+          from __future__ import annotations
+
+          import difflib
+          from pathlib import Path
+
+          a_path = Path("ci/retrieval_thresholds.v2.json")
+          b_path = Path("artifacts/thresholds.generated.json")
+          out_path = Path("artifacts/thresholds.diff.txt")
+
+          if not b_path.exists():
+              out_path.write_text("generated thresholds missing\n", encoding="utf-8")
+              raise SystemExit(0)
+
+          a = a_path.read_text(encoding="utf-8").splitlines(keepends=True)
+          b = b_path.read_text(encoding="utf-8").splitlines(keepends=True)
+          diff = "".join(
+              difflib.unified_diff(
+                  a,
+                  b,
+                  fromfile=str(a_path),
+                  tofile=str(b_path),
+              )
+          )
+          out_path.write_text(diff or "no changes\n", encoding="utf-8")
+          PY
+
+      - name: Upload gate artifacts
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: retrieval-regression-gate
+          path: |
+            artifacts/**
+            artifacts/must_recall_provenance_gate.report.json
+            artifacts/release_gate.report.md
+            bounded_gate_artifacts/artifacts/parsing_proof_broader_sample/rollout.json
+            bounded_gate_artifacts/artifacts/parsing_proof_broader_sample/summary.json
+            bounded_gate_artifacts/artifacts/parsing_proof_broader_sample/report.json
+            bounded_gate_artifacts/artifacts/parsing_proof_broader_sample/gate.json
+            bounded_gate_artifacts/artifacts/parsing_proof_broader_sample/diff.json
+            bounded_gate_artifacts/artifacts/parsing_proof_broader_sample/diff.md
+            bounded_gate_artifacts/artifacts/parsing_proof_broader_sample/review.md
+            ci/retrieval_regression_fixture.v1.json
+            ci/retrieval_thresholds.v2.json
+
+      - name: Stop backend
+        if: always()
+        run: |
+          if [ -f artifacts/backend.pid ]; then
+            kill "$(cat artifacts/backend.pid)" || true
+          fi
+
+  kg-search-regression-gate:
+    if: github.event_name != 'pull_request'
+    runs-on: [self-hosted, Linux, X64, ordo]
+    timeout-minutes: 60
+    services:
+      postgres:
+        image: postgres:15
+        env:
+          POSTGRES_DB: ordo
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432/tcp
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          clean: true
+        env:
+          http_proxy: ${{ vars.CI_HTTP_PROXY || '' }}
+          https_proxy: ${{ vars.CI_HTTPS_PROXY || '' }}
+          no_proxy: ${{ vars.CI_NO_PROXY != '' && format('127.0.0.1,localhost,{0}', vars.CI_NO_PROXY) || '127.0.0.1,localhost' }}
+
+      - name: Prepare self-hosted Python
+        if: ${{ runner.environment == 'self-hosted' }}
+        run: bash scripts/prepare_self_hosted_ci.sh --include-torch-wheel-dir
+
+      - name: Install Python deps
+        run: |
+          python -m pip install --upgrade pip
+          python ci/download_verified_wheels.py --cache-dir "$TORCH_WHEEL_DIR"
+          python -m pip install --retries 5 --timeout 120 \
+            "$TORCH_WHEEL_DIR/torch-2.13.0+cpu-cp311-cp311-manylinux_2_28_x86_64.whl" \
+            "$TORCH_WHEEL_DIR/torchvision-0.28.0+cpu-cp311-cp311-manylinux_2_28_x86_64.whl"
+          python -m pip install --retries 10 --timeout 120 -r requirements.txt
+
+      - name: Allocate isolated host ports
+        run: |
+          port="$(python - <<'PY'
+          import socket
+
+          with socket.socket() as sock:
+              sock.bind(("127.0.0.1", 0))
+              print(sock.getsockname()[1])
+          PY
+          )"
+          echo "ORDO_KG_API_PORT=$port" >> "$GITHUB_ENV"
+
+      - name: Seed CI KG search fixture (DB + KG rows + cases bundle)
+        env:
+          DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:${{ job.services.postgres.ports['5432'] }}/ordo
+          ENV: ci
+          AUTH_MODE: header
+        run: |
+          mkdir -p artifacts
+          python scripts/seed_ci_kg_search_regression.py \
+            --fixture ci/kg_search_regression_fixture.v1.json \
+            --out-cases artifacts/kg_regression_cases.json
+
+      - name: Start backend (KG enabled, no Milvus/embeddings)
+        env:
+          DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:${{ job.services.postgres.ports['5432'] }}/ordo
+          ENV: ci
+          AUTH_MODE: header
+          SECRET_KEY: ci-kg-search-secret-key-0123456789
+          DEFAULT_TENANT_ID: 00000000-0000-0000-0000-000000000000
+          VECTOR_BACKEND: faiss
+          TASK_QUEUE_ENABLED: "false"
+          EMBEDDING_CACHE_ENABLED: "false"
+          MINIO_ENABLED: "false"
+          LEXICAL_DB_TRGM_ENABLED: "false"
+          ENABLE_RERANKER: "false"
+          BM25_INDEX_ENABLED: "false"
+          KG_ENABLED: "true"
+          KG_SEARCH_VECTOR_RECALL_ENABLED: "false"
+        run: |
+          python -m uvicorn app.main:app --host 127.0.0.1 --port "$ORDO_KG_API_PORT" \
+            > artifacts/kg-backend.log 2>&1 &
+          echo $! > artifacts/backend.pid
+
+      - name: Wait for backend ready
+        run: |
+          backend_pid="$(cat artifacts/backend.pid)"
+          for i in $(seq 1 120); do
+            if BACKEND_BASE_URL="http://127.0.0.1:${ORDO_KG_API_PORT}" python scripts/api_ping.py; then
+              exit 0
+            fi
+            if ! kill -0 "$backend_pid" 2>/dev/null; then
+              echo "backend exited before becoming ready" >&2
+              tail -200 artifacts/kg-backend.log >&2
+              exit 1
+            fi
+            sleep 1
+          done
+          echo "backend not ready" >&2
+          tail -200 artifacts/kg-backend.log >&2
+          exit 1
+
+      - name: Run KG search regression gate
+        env:
+          DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:${{ job.services.postgres.ports['5432'] }}/ordo
+        run: |
+          python scripts/kg_search_regression_gate.py \
+            --base-url "http://127.0.0.1:${ORDO_KG_API_PORT}/api/v1" \
+            --tenant-id 00000000-0000-0000-0000-000000000000 \
+            --user-id ci-bot \
+            --cases artifacts/kg_regression_cases.json \
+            --thresholds ci/kg_search_thresholds.v1.json \
+            --k 10 \
+            --out-run-json artifacts/kg.diagnostics.json
+
+      - name: Upload gate artifacts
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: kg-search-regression-gate
+          path: |
+            artifacts/**
+            ci/kg_search_regression_fixture.v1.json
+            ci/kg_search_thresholds.v1.json
+
+      - name: Stop backend
+        if: always()
+        run: |
+          if [ -f artifacts/backend.pid ]; then
+            kill "$(cat artifacts/backend.pid)" || true
+          fi

@@ -1,0 +1,67 @@
+'use client'
+
+import { useEffect } from 'react'
+
+import { Label } from '@/components/ui/label'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
+import { useDatasets } from '@/hooks/use-datasets'
+import { cn } from '@/lib/utils'
+
+const ALL_DATASETS_VALUE = '__all_datasets__'
+
+export function DatasetSelectField({
+  value,
+  onChange,
+  label = '数据集',
+  placeholder = '选择数据集',
+  allLabel = '全部数据集',
+  allowAll = false,
+  autoSelectFirst = false,
+  className,
+}: Readonly<{
+  value: string
+  onChange: (value: string) => void
+  label?: string
+  placeholder?: string
+  allLabel?: string
+  allowAll?: boolean
+  autoSelectFirst?: boolean
+  className?: string
+}>) {
+  const { datasets, isLoading } = useDatasets()
+
+  const selectedValue = value || (allowAll ? ALL_DATASETS_VALUE : '')
+  const firstDatasetId = String(datasets[0]?.id || '').trim()
+
+  useEffect(() => {
+    if (!autoSelectFirst || allowAll || value || !firstDatasetId) return
+    onChange(firstDatasetId)
+  }, [allowAll, autoSelectFirst, firstDatasetId, onChange, value])
+
+  return (
+    <div className={cn('space-y-1', className)}>
+      <Label className="text-[11px] font-medium text-muted-foreground">{label}</Label>
+      <Select
+        value={selectedValue}
+        onValueChange={(next) => onChange(next === ALL_DATASETS_VALUE ? '' : next)}
+        disabled={isLoading || (!allowAll && !datasets.length)}
+      >
+        <SelectTrigger className="h-8 text-xs">
+          <SelectValue placeholder={isLoading ? '加载中...' : placeholder} />
+        </SelectTrigger>
+        <SelectContent>
+          {allowAll ? <SelectItem value={ALL_DATASETS_VALUE}>{allLabel}</SelectItem> : null}
+          {datasets.map((dataset) => {
+            const id = String(dataset.id || '').trim()
+            if (!id) return null
+            return (
+              <SelectItem key={id} value={id}>
+                {dataset.name || id}
+              </SelectItem>
+            )
+          })}
+        </SelectContent>
+      </Select>
+    </div>
+  )
+}

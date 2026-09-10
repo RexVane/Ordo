@@ -1,0 +1,571 @@
+# Default values for Ordo Helm chart.
+
+image:
+  repository: ordo/ordo
+  tag: ""
+  pullPolicy: IfNotPresent
+
+# Optional image pull secrets for private registries.
+imagePullSecrets: []
+
+nameOverride: ""
+fullnameOverride: ""
+
+# If set, the chart will NOT create an env Secret and will use this existing Secret for env vars.
+# The secret should contain key/value pairs corresponding to app config env vars.
+existingSecretName: ""
+
+# Optional security hardening presets for Kubernetes.
+#
+# Design:
+# - Safe defaults are enabled for the official non-root image.
+# - Set `security.hardened=false` only for a custom image that cannot run with
+#   non-root, seccomp RuntimeDefault, or dropped capabilities.
+# - You can override globally (security.*Context) and/or per component
+#   (api/worker/cronjobs.*.*Context).
+security:
+  hardened: true
+
+  # Global defaults applied to all pods/containers (merged with per-component overrides).
+  #
+  # Tip (PVC permissions): if the uploads PVC is not writable for the image user,
+  # configure a pod-level fsGroup, e.g.:
+  #   fsGroup: 1000
+  #   fsGroupChangePolicy: "OnRootMismatch"
+  podSecurityContext: {}
+  containerSecurityContext: {}
+
+  # Only applied when `security.hardened=true` (still overrideable per component).
+  hardenedPodSecurityContext:
+    seccompProfile:
+      type: RuntimeDefault
+  hardenedContainerSecurityContext:
+    allowPrivilegeEscalation: false
+    capabilities:
+      drop:
+        - ALL
+    runAsNonRoot: true
+    # NOTE: readOnlyRootFilesystem is intentionally NOT enabled by default.
+    # Some optional local backends (e.g., Chroma/FAISS) may write under /app.
+    # If you enable it, consider also enabling `security.tmpEmptyDir` and mounting
+    # writable volumes for any required paths.
+
+  # Optional /tmp emptyDir. Useful when enabling readOnlyRootFilesystem or when
+  # runtime needs a guaranteed-writable temp directory.
+  tmpEmptyDir:
+    enabled: false
+    mountPath: /tmp
+    sizeLimit: ""
+
+# Security baseline: do not mount the Kubernetes service account token unless explicitly needed.
+# This chart does not require in-cluster K8s API access by default.
+automountServiceAccountToken: false
+
+serviceAccount:
+  create: false
+  # If set, use this ServiceAccount name. When empty and create=true, a chart-managed
+  # ServiceAccount named "<release>-ordo" (fullname) is created.
+  name: ""
+  annotations: {}
+
+# Values to write into the chart-managed Secret (only used when existingSecretName is empty).
+# IMPORTANT: Kubernetes Secrets are not encrypted by default; prefer creating an external secret
+# via your cluster's secret manager and setting existingSecretName.
+secretEnv:
+  # Runtime mode / DB ownership. Keep dev-friendly defaults here; production should
+  # override these explicitly and run Alembic out-of-band or via the optional hook Job.
+  ENV: "development"
+  DB_CREATE_ALL_ON_STARTUP: "true"
+  DB_RUNTIME_MIGRATIONS_ENABLED: "true"
+
+  # Required for most real deployments
+  AUTH_MODE: "jwt"
+  SECRET_KEY: ""
+
+  # LLM
+  LLM_API_KEY: ""
+  LLM_API_BASE: "https://api.openai.com/v1"
+  LLM_MODEL: "gpt-4o-mini"
+
+  # Tenant/auth headers
+  TENANT_HEADER: "X-Tenant-ID"
+
+  # Postgres / Redis / Vector store
+  DATABASE_URL: ""
+  REDIS_URL: ""
+  VECTOR_BACKEND: "milvus"
+  MILVUS_HOST: ""
+  MILVUS_PORT: "19530"
+
+  # MinIO (images / documents)
+  MINIO_ENABLED: "false"
+  MINIO_ENDPOINT: ""
+  MINIO_ACCESS_KEY: ""
+  MINIO_SECRET_KEY: ""
+  MINIO_BUCKET_NAME: "ordo"
+  MINIO_USE_SSL: "false"
+  MINIO_DOCUMENTS_ENABLED: "true"
+
+  # Files
+  UPLOAD_DIR: "/data/uploads"
+
+  # Task queue (arq)
+  TASK_QUEUE_ENABLED: "true"
+  TASK_QUEUE_NAME: "ordo"
+  TASK_WORKER_MAX_JOBS: "4"
+
+  # Prometheus metrics (optional): enables /metrics endpoint + request metrics middleware
+  PROMETHEUS_ENABLED: "false"
+
+  # CORS (adjust for your frontend origin(s))
+  CORS_ORIGINS: "http://localhost:3000"
+
+# Render-time hints used by Helm fail-fast validation.
+#
+# Why this exists:
+# - When `existingSecretName` is used, Helm cannot inspect the external Secret's env vars.
+# - These hints let the chart validate multi-instance safety without guessing.
+# - Empty values fall back to `api.extraEnv` first, then `secretEnv`.
+runtimeGuards:
+  environment: ""
+  vectorBackend: ""
+  minioEnabled: ""
+  minioDocumentsEnabled: ""
+  dbCreateAllOnStartup: ""
+  dbRuntimeMigrationsEnabled: ""
+
+api:
+  enabled: true
+  replicas: 1
+
+  service:
+    type: ClusterIP
+    port: 8000
+
+  # Probes hit the FastAPI endpoints:
+  # - readiness: /api/v1/health/ready (checks deps)
+  # - liveness:  /api/v1/health (process-level)
+  readinessProbe:
+    enabled: true
+    initialDelaySeconds: 20
+    periodSeconds: 10
+    timeoutSeconds: 3
+    failureThreshold: 10
+  livenessProbe:
+    enabled: true
+    initialDelaySeconds: 30
+    periodSeconds: 20
+    timeoutSeconds: 3
+    failureThreshold: 6
+
+  autoscaling:
+    enabled: false
+    minReplicas: 2
+    maxReplicas: 10
+    targetCPUUtilizationPercentage: 80
+    # targetMemoryUtilizationPercentage: 80
+
+  pdb:
+    enabled: false
+    # Use exactly ONE of: minAvailable / maxUnavailable.
+    minAvailable: 1
+    maxUnavailable: ""
+
+  terminationGracePeriodSeconds: null
+  priorityClassName: ""
+  resources: {}
+  podSecurityContext: {}
+  securityContext: {}
+  automountServiceAccountToken: null
+  podAnnotations: {}
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+  topologySpreadConstraints: []
+
+  extraEnv: []
+  extraVolumeMounts: []
+  extraVolumes: []
+
+worker:
+  enabled: true
+  replicas: 1
+  command:
+    - arq
+    - app.tasks.worker.WorkerSettings
+  healthcheckCommand:
+    - arq
+    - --check
+    - app.tasks.queue.WorkerHealthSettings
+
+  readinessProbe:
+    enabled: true
+    initialDelaySeconds: 15
+    periodSeconds: 10
+    timeoutSeconds: 5
+    failureThreshold: 3
+
+  autoscaling:
+    enabled: false
+    minReplicas: 1
+    maxReplicas: 10
+    targetCPUUtilizationPercentage: 80
+
+  pdb:
+    enabled: false
+    minAvailable: 1
+    maxUnavailable: ""
+
+  terminationGracePeriodSeconds: null
+  priorityClassName: ""
+  resources: {}
+  podSecurityContext: {}
+  securityContext: {}
+  automountServiceAccountToken: null
+  podAnnotations: {}
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+  topologySpreadConstraints: []
+
+  extraEnv: []
+  extraVolumeMounts: []
+  extraVolumes: []
+
+ingress:
+  enabled: false
+  className: ""
+  annotations: {}
+  hosts:
+    - host: ordo.local
+      paths:
+        - path: /
+          pathType: Prefix
+  tls: []
+
+# Optional NetworkPolicies (Kubernetes NetworkPolicy).
+#
+# Defaults:
+# - disabled (no policy objects created; cluster default behavior applies)
+# - when enabled: ingress is restricted (api allow same-namespace by default; worker deny ingress)
+# - egress is still allow-all unless `networkPolicy.egress.restrict=true`
+networkPolicy:
+  enabled: false
+
+  api:
+    ingress:
+      allowSameNamespace: true
+      # List of NetworkPolicyPeer objects (raw K8s shape). Example:
+      # extraFrom:
+      #   - namespaceSelector:
+      #       matchLabels:
+      #         kubernetes.io/metadata.name: ingress-nginx
+      #     podSelector:
+      #       matchLabels:
+      #         app.kubernetes.io/name: ingress-nginx
+      extraFrom: []
+
+  worker:
+    ingress:
+      # Worker typically does not need ingress.
+      allowSameNamespace: false
+      extraFrom: []
+
+  egress:
+    # When false: do not create any egress policy (allow-all egress).
+    # When true: only allow DNS + configured allowlist rules.
+    restrict: false
+    allowDNS: true
+    # List of raw NetworkPolicyEgressRule items (to/ports).
+    rules: []
+
+persistence:
+  uploads:
+    enabled: true
+    existingClaim: ""
+    storageClassName: ""
+    accessModes:
+      - ReadWriteOnce
+    size: 20Gi
+
+migrations:
+  # Optional Alembic hook Job for production installs/upgrades.
+  #
+  # Safety:
+  # - Requires `existingSecretName`, because pre-install hooks run before the chart-managed
+  #   Secret exists.
+  # - Intended for deployments that also set DB_CREATE_ALL_ON_STARTUP=false and
+  #   DB_RUNTIME_MIGRATIONS_ENABLED=false.
+  enabled: false
+  backoffLimit: 1
+  activeDeadlineSeconds: 1800
+  ttlSecondsAfterFinished: 300
+  command:
+    - python
+    - scripts/alembic_cli.py
+    - -c
+    - alembic.ini
+    - upgrade
+    - head
+  podAnnotations: {}
+  resources: {}
+  podSecurityContext: {}
+  securityContext: {}
+  automountServiceAccountToken: null
+  priorityClassName: ""
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+  extraEnv: []
+
+prometheus:
+  serviceMonitor:
+    enabled: false
+    interval: 30s
+    scrapeTimeout: 10s
+    additionalLabels: {}
+
+  # Prometheus Operator alert rules (PrometheusRule CRD).
+  prometheusRule:
+    enabled: false
+    additionalLabels: {}
+
+grafana:
+  dashboard:
+    # When enabled, the chart creates a ConfigMap containing the dashboard JSON.
+    # This is compatible with the Grafana sidecar pattern (configmap dashboards).
+    enabled: false
+    labels:
+      grafana_dashboard: "1"
+    annotations: {}
+
+# Optional Kubernetes CronJobs (ops automation).
+#
+# Notes:
+# - Schedules are evaluated by the Kubernetes control-plane timezone (often UTC).
+# - Jobs are bounded by default; adjust max_* carefully for large deployments.
+cronjobs:
+  indexAudit:
+    enabled: false
+    schedule: "0 2 * * *"
+    suspend: false
+    concurrencyPolicy: Forbid
+    successfulJobsHistoryLimit: 1
+    failedJobsHistoryLimit: 3
+
+    # Tenant scope (mutually exclusive):
+    # - allTenants=true   -> pass --all-tenants
+    # - tenantId="<uuid>" -> pass --tenant-id
+    # - neither           -> default tenant (DEFAULT_TENANT_ID)
+    allTenants: false
+    tenantId: ""
+
+    # Script mode: when true, writes an audit log entry (best-effort).
+    execute: true
+    force: false
+
+    # Bounds
+    maxDatasets: 50
+    maxCheckIds: 5000
+    milvusListLimit: 2000
+    sampleLimit: 20
+
+    terminationGracePeriodSeconds: null
+    priorityClassName: ""
+    resources: {}
+    podSecurityContext: {}
+    securityContext: {}
+    automountServiceAccountToken: null
+    podAnnotations: {}
+    nodeSelector: {}
+    tolerations: []
+    affinity: {}
+    extraEnv: []
+
+  evidenceDriftAudit:
+    enabled: false
+    schedule: "30 2 * * *"
+    suspend: false
+    concurrencyPolicy: Forbid
+    successfulJobsHistoryLimit: 1
+    failedJobsHistoryLimit: 3
+
+    allTenants: false
+    tenantId: ""
+
+    execute: true
+    force: false
+
+    # Bounds
+    maxDatasets: 50
+    includeArchivedItems: false
+    includeDetails: false
+    detailsLimit: 0
+    sliceTopN: 20
+
+    terminationGracePeriodSeconds: null
+    priorityClassName: ""
+    resources: {}
+    podSecurityContext: {}
+    securityContext: {}
+    automountServiceAccountToken: null
+    podAnnotations: {}
+    nodeSelector: {}
+    tolerations: []
+    affinity: {}
+    extraEnv: []
+
+  accessReviewSummary:
+    enabled: false
+    schedule: "0 1 * * *"
+    suspend: false
+    concurrencyPolicy: Forbid
+    successfulJobsHistoryLimit: 1
+    failedJobsHistoryLimit: 3
+
+    allTenants: false
+    tenantId: ""
+
+    # Script mode: when true, writes an audit log entry (best-effort).
+    execute: true
+    force: false
+
+    terminationGracePeriodSeconds: null
+    priorityClassName: ""
+    resources: {}
+    podSecurityContext: {}
+    securityContext: {}
+    automountServiceAccountToken: null
+    podAnnotations: {}
+    nodeSelector: {}
+    tolerations: []
+    affinity: {}
+    extraEnv: []
+
+  semanticCacheRetention:
+    enabled: false
+    schedule: "17 * * * *"
+    suspend: false
+    concurrencyPolicy: Forbid
+    successfulJobsHistoryLimit: 1
+    failedJobsHistoryLimit: 3
+
+    # Tenant scope (mutually exclusive):
+    # - allTenants=true   -> pass --all-tenants
+    # - tenantId="<uuid>" -> pass --tenant-id
+    # - neither           -> default tenant (DEFAULT_TENANT_ID)
+    allTenants: false
+    tenantId: ""
+
+    # Script mode: when true, deletes expired/orphan Milvus rows instead of dry-run only.
+    execute: true
+
+    # Bounds
+    maxScan: 1000
+    maxDelete: 100
+
+    terminationGracePeriodSeconds: null
+    priorityClassName: ""
+    resources: {}
+    podSecurityContext: {}
+    securityContext: {}
+    automountServiceAccountToken: null
+    podAnnotations: {}
+    nodeSelector: {}
+    tolerations: []
+    affinity: {}
+    extraEnv: []
+
+  dbMaintenance:
+    enabled: false
+    schedule: "0 3 * * 0"
+    suspend: false
+    concurrencyPolicy: Forbid
+    successfulJobsHistoryLimit: 1
+    failedJobsHistoryLimit: 3
+
+    # Jobs: pick 1+ when enabled.
+    vacuum: false
+    analyze: false
+    verbose: false
+    tables: []
+
+    auditLogs: false
+    regressionRuns: false
+
+    # Tenant scope (retention only, mutually exclusive):
+    # - allTenants=true   -> pass --all-tenants
+    # - tenantId="<uuid>" -> pass --tenant-id
+    # - neither           -> default tenant (DEFAULT_TENANT_ID)
+    allTenants: false
+    tenantId: ""
+
+    # Script mode: when true, performs writes (VACUUM/retention). Start with dry-run first.
+    execute: false
+
+    retentionDays: 90
+    maxDelete: 100000
+
+    terminationGracePeriodSeconds: null
+    priorityClassName: ""
+    resources: {}
+    podSecurityContext: {}
+    securityContext: {}
+    automountServiceAccountToken: null
+    podAnnotations: {}
+    nodeSelector: {}
+    tolerations: []
+    affinity: {}
+    extraEnv: []
+
+  # Nightly retrieval ablations (regression runs) via scripts/run_nightly_ablations.py.
+  #
+  # Notes:
+  # - Schedules are evaluated by the Kubernetes control-plane timezone (often UTC).
+  # - If your cluster supports CronJob `timeZone`, you can set it here; leave empty to omit.
+  # - Keep bounds small for safety; increase gradually after validating runtime/cost.
+  nightlyAblations:
+    enabled: false
+    schedule: "0 2 * * *"
+    timeZone: ""
+    suspend: false
+    concurrencyPolicy: Forbid
+    successfulJobsHistoryLimit: 1
+    failedJobsHistoryLimit: 3
+
+    # Tenant scope (optional; defaults to DEFAULT_TENANT_ID when empty):
+    tenantId: ""
+
+    # Dataset scope (mutually exclusive):
+    # - allDatasets=true   -> pass --all-datasets
+    # - datasetId="<uuid>" -> pass --dataset-id (required when allDatasets=false)
+    allDatasets: false
+    datasetId: ""
+    maxDatasets: 10
+
+    # Script mode: when true, writes regression runs + executes them synchronously.
+    execute: true
+
+    # Bounds
+    maxCases: 50
+
+    # Empty string means retrieval-only (no RAGAS, no LLM) - recommended default for ops CronJobs.
+    metrics: ""
+
+    # Optional: pass a deterministic regression cases bundle file path (must exist in the container).
+    cases: ""
+
+    # Optional additional args (each item becomes one CLI arg).
+    extraArgs: []
+
+    terminationGracePeriodSeconds: null
+    priorityClassName: ""
+    resources: {}
+    podSecurityContext: {}
+    securityContext: {}
+    automountServiceAccountToken: null
+    podAnnotations: {}
+    nodeSelector: {}
+    tolerations: []
+    affinity: {}
+    extraEnv: []

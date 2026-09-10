@@ -1,0 +1,92 @@
+ARG NODE_BASE_IMAGE=public.ecr.aws/docker/library/node:20-alpine@sha256:fb4cd12c85ee03686f6af5362a0b0d56d50c58a04632e6c0fb8363f609372293
+FROM ${NODE_BASE_IMAGE} AS base
+
+ARG PNPM_REGISTRY=https://registry.npmmirror.com
+ENV COREPACK_NPM_REGISTRY=$PNPM_REGISTRY
+RUN corepack enable
+WORKDIR /app
+
+FROM base AS deps
+ARG PNPM_REGISTRY
+COPY package.json pnpm-lock.yaml ./
+RUN --mount=type=cache,id=ordo-web-pnpm-store,target=/root/.local/share/pnpm/store,sharing=locked \
+    pnpm config set registry "$PNPM_REGISTRY" \
+    && pnpm install --frozen-lockfile
+
+FROM base AS builder
+COPY --from=deps /app/node_modules ./node_modules
+COPY package.json pnpm-lock.yaml ./
+COPY next.config.mjs tsconfig.json tailwind.config.ts postcss.config.mjs eslint.config.js next-env.d.ts vitest.config.ts ./
+COPY app ./app
+COPY components ./components
+COPY contexts ./contexts
+COPY hooks ./hooks
+COPY i18n ./i18n
+COPY lib ./lib
+COPY public ./public
+COPY instrumentation-client.ts ./instrumentation-client.ts
+COPY proxy.ts ./proxy.ts
+COPY scripts ./scripts
+COPY sentry.edge.config.ts ./sentry.edge.config.ts
+COPY sentry.server.config.ts ./sentry.server.config.ts
+COPY store ./store
+COPY types ./types
+COPY workers ./workers
+ARG NEXT_PUBLIC_API_URL=http://localhost:8000
+ARG NEXT_PUBLIC_ADMIN_CONTACT_URL=mailto:admin@example.com
+ARG API_INTERNAL_URL=http://ordo-api:8000
+ARG NEXT_PUBLIC_API_TIMEOUT_MS=60000
+ARG NEXT_PUBLIC_API_LONG_TIMEOUT_MS=600000
+ARG NEXT_PUBLIC_USER_ID=demo
+ARG NEXT_PUBLIC_TENANT_ID=00000000-0000-0000-0000-000000000000
+ARG ORDO_BUILD_SHA=""
+ARG ORDO_BUILD_TIME=""
+ENV NODE_ENV=production
+ENV NEXT_PUBLIC_API_URL=$NEXT_PUBLIC_API_URL
+ENV NEXT_PUBLIC_ADMIN_CONTACT_URL=$NEXT_PUBLIC_ADMIN_CONTACT_URL
+ENV API_INTERNAL_URL=$API_INTERNAL_URL
+ENV NEXT_PUBLIC_API_TIMEOUT_MS=$NEXT_PUBLIC_API_TIMEOUT_MS
+ENV NEXT_PUBLIC_API_LONG_TIMEOUT_MS=$NEXT_PUBLIC_API_LONG_TIMEOUT_MS
+ENV NEXT_PUBLIC_USER_ID=$NEXT_PUBLIC_USER_ID
+ENV NEXT_PUBLIC_TENANT_ID=$NEXT_PUBLIC_TENANT_ID
+RUN pnpm build && pnpm prune --prod
+RUN rm -rf .next_build/cache
+
+FROM base AS runner
+ENV NODE_ENV=production
+ENV NEXT_TELEMETRY_DISABLED=1
+ENV HOST=0.0.0.0
+ARG NEXT_PUBLIC_API_URL=http://localhost:8000
+ARG NEXT_PUBLIC_ADMIN_CONTACT_URL=mailto:admin@example.com
+ARG NEXT_PUBLIC_API_TIMEOUT_MS=60000
+ARG NEXT_PUBLIC_API_LONG_TIMEOUT_MS=600000
+ARG NEXT_PUBLIC_USER_ID=demo
+ARG NEXT_PUBLIC_TENANT_ID=00000000-0000-0000-0000-000000000000
+ARG ORDO_BUILD_SHA=""
+ARG ORDO_BUILD_TIME=""
+ENV NEXT_PUBLIC_API_URL=$NEXT_PUBLIC_API_URL
+ENV NEXT_PUBLIC_ADMIN_CONTACT_URL=$NEXT_PUBLIC_ADMIN_CONTACT_URL
+ENV NEXT_PUBLIC_API_TIMEOUT_MS=$NEXT_PUBLIC_API_TIMEOUT_MS
+ENV NEXT_PUBLIC_API_LONG_TIMEOUT_MS=$NEXT_PUBLIC_API_LONG_TIMEOUT_MS
+ENV NEXT_PUBLIC_USER_ID=$NEXT_PUBLIC_USER_ID
+ENV NEXT_PUBLIC_TENANT_ID=$NEXT_PUBLIC_TENANT_ID
+ENV ORDO_BUILD_SHA=$ORDO_BUILD_SHA
+ENV ORDO_BUILD_TIME=$ORDO_BUILD_TIME
+
+COPY --from=builder /app/package.json ./package.json
+COPY --from=builder /app/next.config.mjs ./next.config.mjs
+COPY --from=builder /app/public ./public
+COPY --from=builder /app/.next_build ./.next_build
+COPY --from=builder /app/node_modules ./node_modules
+COPY --from=builder /app/scripts/production-server.mjs /app/scripts/trusted-forwarding.mjs ./scripts/
+# Perf note:
+# Avoid recursive chown/chmod across node_modules during local rebuilds; it's slow and
+# unnecessary as long as we run the server as the non-root `node` user.
+
+EXPOSE 3000
+
+HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
+  CMD wget -Y off -qO- http://127.0.0.1:3000/ > /dev/null || exit 1
+
+USER node
+CMD ["node", "scripts/production-server.mjs"]

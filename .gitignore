@@ -1,0 +1,125 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+env/
+ENV/
+.venv/
+.venv
+.venv*/
+.venv*
+build/
+dist/
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.pycache/
+*.trie
+
+# Node
+node_modules/
+node_modules
+.next/
+.next
+.next_build/
+.next_build
+out/
+dist/
+.npm
+package-lock.json
+!docs-site/package-lock.json
+*.log
+
+# Environment
+.env
+.env.lock
+.env.local
+.env.*.local
+
+# IDEs
+.vscode/
+.idea/
+.cursor/
+.run/
+*.swp
+*.swo
+*~
+
+# AI/agent tooling (local-only; do not commit agent state or skills)
+/AGENTS.md
+/skills-lock.json
+.agents/
+.beads/
+.claude/
+.codex/
+.gemini/
+.omx/
+.serena/
+.shared/
+.worktrees/
+
+# OS
+.DS_Store
+Thumbs.db
+# Windows reserved filenames (can be created via WSL and break tooling on Windows)
+NUL
+
+# Project specific
+uploads/
+logs/
+chroma_db/
+artifacts/
+runs/*.pdf
+runs/.deepseek_ocr/
+runs/perf/
+runs/parser_checks/
+runs/queryset_health/
+runs/smoke/
+.playwright-mcp/
+.playwright-cli/
+chunk-preview-*.png
+graph-snapshots-*.png
+web/coverage/
+web/test-results/
+web/playwright-report/
+app/deepdoc/resources/models/
+web/.next/
+web/.next_build/
+web/.next_dev_tmp/
+web/public/monaco/
+web/public/pdfjs/
+web/openapi.json
+web/types/openapi.ts
+# Generated copy for static API docs site (source: make api-docs-build)
+docs/api/site/openapi.json
+docs/api/site/handbook/
+*.sqlite
+*.db
+*.tsbuildinfo
+.docling_tmp/
+
+# Docker
+docker/.env
+docker/.env.*
+
+# Retrieval index caches (generated artifacts; keep out of git)
+data/sparse_indexes/
+data/colbert_indexes/
+web/.next_3101/
+
+# Local generated analysis/training artifacts
+.scannerwork/
+work/
+
+# Local planning and design-review notes (not part of the public docs set)
+/plans/
+/docs/plans/
+/docs/notes/
+/docs/superpowers/
+/docs/waves/
+/web/docs/
+Ordo/

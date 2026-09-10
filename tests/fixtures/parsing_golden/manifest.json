@@ -1,0 +1,40 @@
+{
+  "cases": [
+    {
+      "id": "seal_invoice_case",
+      "path": "seal_invoice/input/sample.md",
+      "golden_markdown": "seal_invoice/golden/sample.md",
+      "specialty_elements_path": "seal_invoice/golden/sample.specialty.json"
+    },
+    {
+      "id": "formula_pdf_case",
+      "path": "formula_pdf/input/sample.md",
+      "golden_markdown": "formula_pdf/golden/sample.md",
+      "specialty_elements_path": "formula_pdf/golden/sample.specialty.json"
+    },
+    {
+      "id": "table_scan_case",
+      "path": "table_scan/input/sample.md",
+      "golden_markdown": "table_scan/golden/sample.md",
+      "specialty_elements_path": "table_scan/golden/sample.specialty.json"
+    },
+    {
+      "id": "qr_sheet_case",
+      "path": "qr_sheet/input/sample.md",
+      "golden_markdown": "qr_sheet/golden/sample.md",
+      "specialty_elements_path": "qr_sheet/golden/sample.specialty.json"
+    },
+    {
+      "id": "diagram_page_case",
+      "path": "diagram_page/input/sample.md",
+      "golden_markdown": "diagram_page/golden/sample.md",
+      "specialty_elements_path": "diagram_page/golden/sample.specialty.json"
+    },
+    {
+      "id": "barcode_label_case",
+      "path": "barcode_label/input/sample.md",
+      "golden_markdown": "barcode_label/golden/sample.md",
+      "specialty_elements_path": "barcode_label/golden/sample.specialty.json"
+    }
+  ]
+}

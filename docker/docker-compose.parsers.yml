@@ -1,0 +1,463 @@
+# Optional external parser services (heavyweight).
+#
+# Usage examples (from repo root):
+#   docker compose -f docker/docker-compose.yml -f docker/docker-compose.parsers.yml --profile marker up -d --build
+#   docker compose -f docker/docker-compose.yml -f docker/docker-compose.parsers.yml --profile docling up -d
+#   docker compose -f docker/docker-compose.yml -f docker/docker-compose.parsers.yml --profile docling-gpu up -d
+#   docker compose -f docker/docker-compose.yml -f docker/docker-compose.parsers.yml --profile paddlevl up -d --build
+#   docker compose -f docker/docker-compose.yml -f docker/docker-compose.parsers.yml --profile mineru up -d --build
+#   docker compose -f docker/docker-compose.yml -f docker/docker-compose.parsers.yml --profile mineru --profile mineru-vlm up -d --build
+#   docker compose -f docker/docker-compose.yml -f docker/docker-compose.parsers.yml --profile olmocr up -d --build
+#   docker compose -f docker/docker-compose.yml -f docker/docker-compose.parsers.yml --profile magicpdf up -d --build
+#   docker compose -f docker/docker-compose.yml -f docker/docker-compose.parsers.yml --profile qianfanocr up -d --build
+#
+# For local backend development (infra only):
+#   docker compose -f docker/docker-compose.infra.yml -f docker/docker-compose.parsers.yml --profile mineru up -d --build
+
+services:
+  # Official Docling Serve CPU image (optional; heavyweight but isolated from
+  # the Ordo API/worker image). The non-slim image includes the default model
+  # weights, so no empty cache volume is mounted over them.
+  # Ordo config: DOCLING_ENABLED=true, DOCLING_API_URL=http://ordo-docling:5001
+  ordo-docling:
+    profiles: ["docling"]
+    image: quay.io/docling-project/docling-serve-cpu:v1.28.0
+    restart: unless-stopped
+    hostname: ordo-docling
+    ports:
+      - "127.0.0.1:${DOCLING_PORT:-5001}:5001"
+    environment:
+      TZ: Asia/Shanghai
+      DOCLING_SERVE_ENABLE_UI: "false"
+      DOCLING_SERVE_LOAD_MODELS_AT_BOOT: "true"
+      DOCLING_SERVE_MAX_SYNC_WAIT: ${DOCLING_REQUEST_TIMEOUT_SEC:-600}
+      DOCLING_SERVE_MAX_DOCUMENT_TIMEOUT: ${DOCLING_REQUEST_TIMEOUT_SEC:-600}
+      UVICORN_WORKERS: ${DOCLING_UVICORN_WORKERS:-1}
+      OMP_NUM_THREADS: ${DOCLING_CPU_THREADS:-4}
+      MKL_NUM_THREADS: ${DOCLING_CPU_THREADS:-4}
+    networks:
+      default:
+        aliases:
+          - ordo-docling
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "curl -fsS http://localhost:5001/health >/dev/null || exit 1",
+        ]
+      interval: 30s
+      timeout: 10s
+      retries: 10
+      start_period: 180s
+    deploy:
+      resources:
+        limits:
+          cpus: "${DOCLING_CPU_LIMIT:-4}"
+          memory: ${DOCLING_MEMORY_LIMIT:-12G}
+
+  # Official CUDA 12.8 Docling Serve image (optional; NVIDIA GPU).
+  # Run either this profile or the CPU `docling` profile, never both: they
+  # intentionally share the same Docker alias and host port.
+  ordo-docling-gpu:
+    profiles: ["docling-gpu"]
+    image: ${DOCLING_GPU_IMAGE:-quay.io/docling-project/docling-serve-cu128:v1.28.0}
+    restart: unless-stopped
+    hostname: ordo-docling-gpu
+    ports:
+      - "127.0.0.1:${DOCLING_PORT:-5001}:5001"
+    environment:
+      TZ: Asia/Shanghai
+      NVIDIA_VISIBLE_DEVICES: ${NVIDIA_VISIBLE_DEVICES:-all}
+      NVIDIA_DRIVER_CAPABILITIES: ${NVIDIA_DRIVER_CAPABILITIES:-compute,utility}
+      DOCLING_DEVICE: ${DOCLING_GPU_DEVICE:-cuda}
+      DOCLING_SERVE_ENABLE_UI: "false"
+      DOCLING_SERVE_LOAD_MODELS_AT_BOOT: "true"
+      DOCLING_SERVE_MAX_SYNC_WAIT: ${DOCLING_REQUEST_TIMEOUT_SEC:-600}
+      DOCLING_SERVE_MAX_DOCUMENT_TIMEOUT: ${DOCLING_REQUEST_TIMEOUT_SEC:-600}
+      # One worker avoids duplicating model memory on smaller GPUs such as 8GB cards.
+      DOCLING_SERVE_ENG_LOC_NUM_WORKERS: ${DOCLING_GPU_WORKERS:-1}
+      DOCLING_SERVE_ENG_LOC_SHARE_MODELS: "true"
+      DOCLING_PERF_PAGE_BATCH_SIZE: ${DOCLING_GPU_PAGE_BATCH_SIZE:-2}
+      DOCLING_PERF_ELEMENTS_BATCH_SIZE: ${DOCLING_GPU_ELEMENTS_BATCH_SIZE:-16}
+      UVICORN_WORKERS: 1
+      OMP_NUM_THREADS: ${DOCLING_CPU_THREADS:-4}
+      MKL_NUM_THREADS: ${DOCLING_CPU_THREADS:-4}
+    networks:
+      default:
+        aliases:
+          - ordo-docling
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "curl -fsS http://localhost:5001/health >/dev/null || exit 1",
+        ]
+      interval: 30s
+      timeout: 10s
+      retries: 10
+      start_period: 240s
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+        limits:
+          cpus: "${DOCLING_CPU_LIMIT:-4}"
+          memory: ${DOCLING_GPU_MEMORY_LIMIT:-16G}
+
+  # ETL4LLM (Bisheng Unstructured) parser service (optional).
+  # Then set `ETL4LLM_ENABLED=true` and `ETL4LLM_API_URL=http://ordo-etl4llm:10001/v1/etl4llm/predict` in the root .env.
+  ordo-etl4llm:
+    profiles: ["etl4llm"]
+    image: dataelement/bisheng-unstructured:v0.0.3.14
+    restart: unless-stopped
+    hostname: ordo-etl4llm
+    environment:
+      TZ: Asia/Shanghai
+    networks:
+      default:
+        aliases:
+          - ordo-etl4llm
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:10001/health"]
+      interval: 30s
+      timeout: 20s
+      retries: 3
+
+  # Marker PDF -> Markdown parser service (optional; heavyweight).
+  # Then set `MARKER_ENABLED=true` and `MARKER_API_URL=http://ordo-marker:2080/convert` in the root .env.
+  ordo-marker:
+    profiles: ["marker"]
+    build:
+      context: ./marker
+    restart: unless-stopped
+    hostname: ordo-marker
+    ports:
+      - "127.0.0.1:2080:2080"
+    environment:
+      TZ: Asia/Shanghai
+    networks:
+      default:
+        aliases:
+          - ordo-marker
+    volumes:
+      - marker_cache:/home/appuser/.cache
+
+  # PaddleOCR-VL parser service (optional; heavyweight).
+  # Then set `PADDLE_VL_ENABLED=true` and `PADDLE_VL_API_URL=http://ordo-paddlevl:9030/convert` in the root .env.
+  ordo-paddlevl:
+    profiles: ["paddlevl"]
+    build:
+      context: ./paddlevl
+    restart: unless-stopped
+    hostname: ordo-paddlevl
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    environment:
+      TZ: Asia/Shanghai
+      NVIDIA_VISIBLE_DEVICES: ${NVIDIA_VISIBLE_DEVICES:-all}
+      NVIDIA_DRIVER_CAPABILITIES: ${NVIDIA_DRIVER_CAPABILITIES:-compute,utility}
+      # Service-side options (PaddleOCR doc_parser / PaddleOCR-VL pipeline).
+      PADDLEOCR_PIPELINE_VERSION: ${PADDLEOCR_PIPELINE_VERSION:-v1.5}
+      PADDLEOCR_DEVICE: ${PADDLEOCR_DEVICE:-gpu:0}
+      PADDLEOCR_PIPELINE_TIMEOUT_SEC: ${PADDLEOCR_PIPELINE_TIMEOUT_SEC:-540}
+      PADDLE_PDX_MODEL_SOURCE: ${PADDLE_PDX_MODEL_SOURCE:-aistudio}
+      PADDLE_PDX_CACHE_HOME: ${PADDLE_PDX_CACHE_HOME:-/home/paddleocr/.paddlex}
+      # Skip startup connectivity probes against upstream model mirrors; the
+      # runtime convert endpoint will still surface real download/model errors.
+      PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK: ${PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK:-True}
+    volumes:
+      - paddlevl_cache:/home/paddleocr/.paddlex
+    networks:
+      default:
+        aliases:
+          - ordo-paddlevl
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://localhost:9030/health').read()",
+        ]
+      interval: 30s
+      timeout: 20s
+      retries: 3
+
+  # Populates the shared MinerU model cache volume. Docker build cannot write
+  # into runtime volumes, so this one-shot service makes a fresh host usable
+  # after `docker compose --profile mineru --profile mineru-vlm up --build`.
+  ordo-mineru-models:
+    profiles: ["mineru", "mineru-vlm"]
+    build:
+      context: ./mineru
+    restart: "no"
+    environment:
+      TZ: Asia/Shanghai
+      MINERU_MODEL_SOURCE: ${MINERU_MODEL_SOURCE:-local}
+      MINERU_AUTO_DOWNLOAD_MODELS: ${MINERU_AUTO_DOWNLOAD_MODELS:-1}
+      MINERU_MODEL_DOWNLOAD_SOURCE: ${MINERU_MODEL_DOWNLOAD_SOURCE:-huggingface}
+      MINERU_MODEL_DOWNLOAD_TYPE: ${MINERU_MODEL_DOWNLOAD_TYPE:-auto}
+    volumes:
+      - mineru_cache:/root/.cache
+    command: ["python3", "/app/start_local_api.py", "--download-models-only"]
+
+  # MinerU local FastAPI service (heavy; uses GPU when available).
+  # Then set `MINERU_ENABLED=true` and `MINERU_LOCAL_SERVER_URL=http://ordo-mineru:8000` in the root .env.
+  ordo-mineru:
+    profiles: ["mineru", "mineru-vlm"]
+    build:
+      context: ./mineru
+    restart: unless-stopped
+    hostname: ordo-mineru
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    ports:
+      # Avoid clashing with Ordo backend (8000).
+      - "127.0.0.1:30001:8000"
+    environment:
+      TZ: Asia/Shanghai
+      NVIDIA_VISIBLE_DEVICES: ${NVIDIA_VISIBLE_DEVICES:-all}
+      NVIDIA_DRIVER_CAPABILITIES: ${NVIDIA_DRIVER_CAPABILITIES:-compute,utility}
+      # Model source: "local" reuses the shared cache; "huggingface"/"modelscope" download upstream.
+      MINERU_MODEL_SOURCE: ${MINERU_MODEL_SOURCE:-local}
+      MINERU_AUTO_DOWNLOAD_MODELS: ${MINERU_AUTO_DOWNLOAD_MODELS:-1}
+      MINERU_MODEL_DOWNLOAD_SOURCE: ${MINERU_MODEL_DOWNLOAD_SOURCE:-huggingface}
+      MINERU_MODEL_DOWNLOAD_TYPE: ${MINERU_MODEL_DOWNLOAD_TYPE:-auto}
+      # Keep FastAPI docs enabled by default (so /docs and /openapi.json work).
+      MINERU_API_ENABLE_FASTAPI_DOCS: ${MINERU_API_ENABLE_FASTAPI_DOCS:-1}
+      # Optional: limit concurrent requests at MinerU side (503 when saturated).
+      MINERU_API_MAX_CONCURRENT_REQUESTS: ${MINERU_API_MAX_CONCURRENT_REQUESTS:-1}
+      # Needed when Ordo sends backend=vlm-http-client + server_url inside the Docker network.
+      MINERU_API_ALLOW_PUBLIC_HTTP_CLIENT: ${MINERU_API_ALLOW_PUBLIC_HTTP_CLIENT:-1}
+    networks:
+      default:
+        aliases:
+          - ordo-mineru
+    depends_on:
+      ordo-mineru-models:
+        condition: service_completed_successfully
+    volumes:
+      # Persist downloaded models/caches across restarts.
+      - mineru_cache:/root/.cache
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:8000/openapi.json >/dev/null || exit 1"]
+      interval: 30s
+      timeout: 20s
+      retries: 10
+
+  # MinerU VLM OpenAI-compatible server. Start with profile `mineru-vlm`
+  # and set MINERU_BACKEND=vlm-http-client plus
+  # MINERU_VL_SERVER=http://ordo-mineru-vlm:30000 for Docker backend/worker.
+  ordo-mineru-vlm:
+    profiles: ["mineru-vlm"]
+    build:
+      context: ./mineru
+    restart: unless-stopped
+    hostname: ordo-mineru-vlm
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    ipc: host
+    command: ["python3", "/app/start_vlm_server.py"]
+    ports:
+      # Host access for local Python backend: http://localhost:30002
+      - "127.0.0.1:30002:30000"
+    environment:
+      TZ: Asia/Shanghai
+      NVIDIA_VISIBLE_DEVICES: ${NVIDIA_VISIBLE_DEVICES:-all}
+      NVIDIA_DRIVER_CAPABILITIES: ${NVIDIA_DRIVER_CAPABILITIES:-compute,utility}
+      # Model source: "local" reuses the shared cache; "huggingface"/"modelscope" download upstream.
+      MINERU_MODEL_SOURCE: ${MINERU_MODEL_SOURCE:-local}
+      MINERU_AUTO_DOWNLOAD_MODELS: ${MINERU_AUTO_DOWNLOAD_MODELS:-1}
+      MINERU_MODEL_DOWNLOAD_SOURCE: ${MINERU_MODEL_DOWNLOAD_SOURCE:-huggingface}
+      MINERU_MODEL_DOWNLOAD_TYPE: ${MINERU_MODEL_DOWNLOAD_TYPE:-auto}
+      MINERU_VLM_GPU_MEMORY_UTILIZATION: ${MINERU_VLM_GPU_MEMORY_UTILIZATION:-0.45}
+      VLLM_WORKER_MULTIPROC_METHOD: ${VLLM_WORKER_MULTIPROC_METHOD:-spawn}
+    volumes:
+      - mineru_cache:/root/.cache
+    depends_on:
+      ordo-mineru-models:
+        condition: service_completed_successfully
+    networks:
+      default:
+        aliases:
+          - ordo-mineru-vlm
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python3",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://localhost:30000/health', timeout=5).read()",
+        ]
+      interval: 30s
+      timeout: 10s
+      retries: 20
+      start_period: 180s
+
+  # olmOCR PDF -> Markdown parser service (optional; heavyweight; requires GPU).
+  # Then set `OLMOCR_ENABLED=true` and `OLMOCR_API_URL=http://ordo-olmocr:2085/convert` in the root .env.
+  ordo-olmocr:
+    profiles: ["olmocr"]
+    build:
+      context: ./olmocr
+    restart: unless-stopped
+    hostname: ordo-olmocr
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    environment:
+      TZ: Asia/Shanghai
+      NVIDIA_VISIBLE_DEVICES: ${NVIDIA_VISIBLE_DEVICES:-all}
+      NVIDIA_DRIVER_CAPABILITIES: ${NVIDIA_DRIVER_CAPABILITIES:-compute,utility}
+      # Server-side concurrency guard (1 = recommended for a single GPU).
+      OLMOCR_MAX_CONCURRENT_JOBS: ${OLMOCR_MAX_CONCURRENT_JOBS:-1}
+      OLMOCR_PIPELINE_WORKERS: ${OLMOCR_PIPELINE_WORKERS:-1}
+      OLMOCR_PIPELINE_MAX_CONCURRENT_REQUESTS: ${OLMOCR_PIPELINE_MAX_CONCURRENT_REQUESTS:-1}
+      OLMOCR_PIPELINE_TIMEOUT_SEC: ${OLMOCR_PIPELINE_TIMEOUT_SEC:-1800}
+      # Local vLLM tuning. Defaults are sized for a single 48GB GPU shared with MinerU/PaddleVL.
+      OLMOCR_GPU_MEMORY_UTILIZATION: ${OLMOCR_GPU_MEMORY_UTILIZATION:-0.35}
+      OLMOCR_MAX_MODEL_LEN: ${OLMOCR_MAX_MODEL_LEN:-8192}
+      OLMOCR_MAX_SERVER_READY_TIMEOUT: ${OLMOCR_MAX_SERVER_READY_TIMEOUT:-}
+      OLMOCR_TENSOR_PARALLEL_SIZE: ${OLMOCR_TENSOR_PARALLEL_SIZE:-}
+      OLMOCR_DATA_PARALLEL_SIZE: ${OLMOCR_DATA_PARALLEL_SIZE:-}
+      OLMOCR_VLLM_PORT: ${OLMOCR_VLLM_PORT:-}
+      OLMOCR_EXTRA_ARGS: ${OLMOCR_EXTRA_ARGS:-}
+      OLMOCR_MIN_FREE_GPU_GIB: ${OLMOCR_MIN_FREE_GPU_GIB:-8}
+      # Optional: external OpenAI-compatible server mode (vLLM on another host).
+      OLMOCR_SERVER_URL: ${OLMOCR_SERVER_URL:-}
+      OLMOCR_API_KEY: ${OLMOCR_API_KEY:-}
+      OLMOCR_MODEL: ${OLMOCR_MODEL:-}
+    volumes:
+      - olmocr_cache:/home/appuser/.cache
+    networks:
+      default:
+        aliases:
+          - ordo-olmocr
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import json, urllib.request; data=json.load(urllib.request.urlopen('http://localhost:2085/health', timeout=5)); raise SystemExit(0 if data.get(\"ok\") else 1)",
+        ]
+      interval: 30s
+      timeout: 20s
+      retries: 3
+
+  # MagicPDF PDF -> Markdown parser service (optional; GPU-first service, CPU only when explicitly configured).
+  # Then set `MAGIC_PDF_ENABLED=true` and `MAGIC_PDF_API_URL=http://ordo-magicpdf:2095/convert` in the root .env.
+  ordo-magicpdf:
+    profiles: ["magicpdf"]
+    build:
+      context: ./magicpdf
+    restart: unless-stopped
+    hostname: ordo-magicpdf
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    ports:
+      - "127.0.0.1:2095:2095"
+    environment:
+      TZ: Asia/Shanghai
+      NVIDIA_VISIBLE_DEVICES: ${NVIDIA_VISIBLE_DEVICES:-all}
+      NVIDIA_DRIVER_CAPABILITIES: ${NVIDIA_DRIVER_CAPABILITIES:-compute,utility}
+      MAGIC_PDF_MAX_CONCURRENT_JOBS: ${MAGIC_PDF_MAX_CONCURRENT_JOBS:-1}
+      MAGIC_PDF_MAX_UPLOAD_BYTES: ${MAGIC_PDF_MAX_UPLOAD_BYTES:-52428800}
+      MAGIC_PDF_PIPELINE_TIMEOUT_SEC: ${MAGIC_PDF_PIPELINE_TIMEOUT_SEC:-600}
+      MAGIC_PDF_CLI: ${MAGIC_PDF_CLI:-magic-pdf}
+      MAGIC_PDF_MODELS_DIR: ${MAGIC_PDF_MODELS_DIR:-/opt/ordo-model-cache}
+      MAGIC_PDF_DEVICE_MODE: ${MAGIC_PDF_DEVICE_MODE:-cuda}
+      MAGIC_PDF_FORMULA_ENABLED: ${MAGIC_PDF_FORMULA_ENABLED:-false}
+      MAGIC_PDF_ARTIFACT_ROOT: ${MAGIC_PDF_ARTIFACT_ROOT:-/var/lib/ordo/magicpdf-artifacts}
+    volumes:
+      - mineru_cache:/opt/ordo-model-cache:ro
+      - magicpdf_cache:/home/appuser/.cache
+    networks:
+      default:
+        aliases:
+          - ordo-magicpdf
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import json, urllib.request; data=json.loads(urllib.request.urlopen('http://localhost:2095/health').read()); raise SystemExit(0 if data.get('ok') else 1)",
+        ]
+      interval: 30s
+      timeout: 20s
+      retries: 3
+
+  # Qianfan-OCR wrapper service (optional; calls an OpenAI-compatible vision endpoint).
+  # Then set `QIANFAN_OCR_ENABLED=true` and `QIANFAN_OCR_API_URL=http://ordo-qianfanocr:2090/convert` in the root .env.
+  ordo-qianfanocr:
+    profiles: ["qianfanocr"]
+    build:
+      context: ./qianfanocr
+    restart: unless-stopped
+    hostname: ordo-qianfanocr
+    ports:
+      - "127.0.0.1:2090:2090"
+    environment:
+      TZ: Asia/Shanghai
+      # OpenAI-compatible upstream endpoint, e.g. https://qianfan.baidubce.com/v2 or http://host.docker.internal:8000/v1
+      QIANFAN_OCR_SERVER_URL: ${QIANFAN_OCR_SERVER_URL:-}
+      QIANFAN_OCR_SERVER_API_KEY: ${QIANFAN_OCR_SERVER_API_KEY:-}
+      QIANFAN_OCR_MODEL: ${QIANFAN_OCR_MODEL:-deepseek-ocr}
+      QIANFAN_OCR_MAX_CONCURRENT_JOBS: ${QIANFAN_OCR_MAX_CONCURRENT_JOBS:-1}
+      QIANFAN_OCR_MAX_UPLOAD_BYTES: ${QIANFAN_OCR_MAX_UPLOAD_BYTES:-52428800}
+      QIANFAN_OCR_PAGE_CONCURRENCY: ${QIANFAN_OCR_PAGE_CONCURRENCY:-1}
+      QIANFAN_OCR_REQUEST_TIMEOUT_SEC: ${QIANFAN_OCR_REQUEST_TIMEOUT_SEC:-120}
+      QIANFAN_OCR_PDF_DPI: ${QIANFAN_OCR_PDF_DPI:-200}
+      QIANFAN_OCR_LAYOUT_AS_THOUGHT: ${QIANFAN_OCR_LAYOUT_AS_THOUGHT:-false}
+      QIANFAN_OCR_LAYOUT_TRIGGER: ${QIANFAN_OCR_LAYOUT_TRIGGER:-}
+      QIANFAN_OCR_PROMPT: ${QIANFAN_OCR_PROMPT:-}
+    networks:
+      default:
+        aliases:
+          - ordo-qianfanocr
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://localhost:2090/health').read()",
+        ]
+      interval: 30s
+      timeout: 20s
+      retries: 3
+
+volumes:
+  marker_cache:
+  paddlevl_cache:
+  mineru_cache:
+  olmocr_cache:
+  magicpdf_cache:

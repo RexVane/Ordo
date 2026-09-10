@@ -1,0 +1,12 @@
+[
+  {
+    "id": "q-borderless",
+    "question": "In the inventory snapshot table, which warehouse stores Paper?",
+    "expected_chunk_indexes": [0]
+  },
+  {
+    "id": "q-borderless-2",
+    "question": "In the inventory snapshot table, what quantity is listed for Pens?",
+    "expected_chunk_indexes": [0]
+  }
+]

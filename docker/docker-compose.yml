@@ -1,0 +1,261 @@
+name: ${COMPOSE_PROJECT_NAME:-ordo}
+
+x-backend-build: &backend_build
+  context: ..
+  dockerfile: docker/Dockerfile
+  network: ${DOCKER_BUILD_NETWORK:-default}
+  args:
+    # Optional build metadata (exposed via /api/v1/meta)
+    ORDO_BUILD_SHA: ${ORDO_BUILD_SHA:-}
+    ORDO_BUILD_TIME: ${ORDO_BUILD_TIME:-}
+
+x-backend-env: &backend_env
+  ENV: ${ENV:-development}
+  PYTHONDONTWRITEBYTECODE: 1
+  # Process settings (overrides Dockerfile defaults)
+  HOST: 0.0.0.0
+  PORT: 8000
+  UVICORN_WORKERS: ${BACKEND_WORKERS:-1}
+  # Force container-to-container endpoints (do not depend on host-local `.env` defaults like localhost).
+  DATABASE_URL: postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@ordo-postgres:5432/${POSTGRES_DB:-ordo}
+  MILVUS_HOST: ${MILVUS_HOST_DOCKER:-ordo-milvus}
+  MILVUS_PORT: ${MILVUS_PORT_DOCKER:-19530}
+  # Persisted data dirs (mounted as volumes; avoid coupling to /app code mounts).
+  UPLOAD_DIR: ${UPLOAD_DIR_DOCKER:-/data/uploads}
+  # MinIO for images
+  MINIO_ENABLED: ${MINIO_ENABLED_DOCKER:-true}
+  MINIO_ENDPOINT: ${MINIO_ENDPOINT_DOCKER:-ordo-minio:9000}
+  MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY_DOCKER:-minioadmin}
+  MINIO_SECRET_KEY: ${MINIO_SECRET_KEY_DOCKER:-minioadmin}
+  MINIO_BUCKET_NAME: ${MINIO_BUCKET_NAME_DOCKER:-ordo}
+  MINIO_USE_SSL: ${MINIO_USE_SSL_DOCKER:-false}
+  MINIO_DOCUMENTS_ENABLED: ${MINIO_DOCUMENTS_ENABLED_DOCKER:-true}
+  # CORS (frontend)
+  CORS_ORIGINS: ${CORS_ORIGINS_DOCKER:-http://localhost:3000,http://localhost:3001,http://web:3000}
+  # Task queue
+  TASK_QUEUE_ENABLED: ${TASK_QUEUE_ENABLED_DOCKER:-true}
+  REDIS_URL: ${REDIS_URL_DOCKER:-redis://ordo-redis:6379/0}
+  TASK_QUEUE_NAME: ${TASK_QUEUE_NAME_DOCKER:-ordo}
+  TASK_WORKER_MAX_JOBS: ${TASK_WORKER_MAX_JOBS_DOCKER:-4}
+  # Production Docker baseline: enable upload idempotency and Redis-backed retrieval admission.
+  UPLOAD_DEDUP_ENABLED: ${UPLOAD_DEDUP_ENABLED_DOCKER:-true}
+  RAG_RETRIEVAL_DISTRIBUTED_ADMISSION_ENABLED: ${RAG_RETRIEVAL_DISTRIBUTED_ADMISSION_ENABLED_DOCKER:-true}
+  RAG_RETRIEVAL_DISTRIBUTED_ADMISSION_MAX_CONCURRENCY: ${RAG_RETRIEVAL_DISTRIBUTED_ADMISSION_MAX_CONCURRENCY_DOCKER:-3}
+  # Keep user .env values by default while allowing offline Docker CI to select
+  # the deterministic test embedding space without rewriting the env file.
+  EMBEDDING_PROVIDER: ${EMBEDDING_PROVIDER_DOCKER:-${EMBEDDING_PROVIDER}}
+  EMBEDDING_MODEL: ${EMBEDDING_MODEL_DOCKER:-${EMBEDDING_MODEL}}
+  # Optional Docling Serve sidecar. `make up-docling` supplies Docker-network
+  # overrides without requiring host-development URLs in .env.
+  DOCLING_ENABLED: ${DOCLING_ENABLED_DOCKER:-${DOCLING_ENABLED:-false}}
+  DOCLING_API_URL: ${DOCLING_API_URL_DOCKER:-${DOCLING_API_URL:-}}
+  DOCLING_API_KEY: ${DOCLING_API_KEY:-}
+  DOCLING_REQUEST_TIMEOUT_SEC: ${DOCLING_REQUEST_TIMEOUT_SEC:-600}
+  DOCLING_HEALTH_TIMEOUT_SEC: ${DOCLING_HEALTH_TIMEOUT_SEC:-5}
+  DOCLING_HTTP_TRUST_ENV: ${DOCLING_HTTP_TRUST_ENV:-false}
+
+x-docker-logging: &docker_logging
+  driver: "json-file"
+  options:
+    max-size: "${DOCKER_LOG_MAX_SIZE:-10m}"
+    max-file: "${DOCKER_LOG_MAX_FILE:-3}"
+
+services:
+  # Redis（任务队列/缓存/幂等锁）
+  ordo-redis:
+    image: redis:7
+    restart: unless-stopped
+    logging: *docker_logging
+    command:
+      [
+        "redis-server",
+        "--maxmemory",
+        "${REDIS_MAXMEMORY:-512mb}",
+        "--maxmemory-policy",
+        "${REDIS_MAXMEMORY_POLICY:-allkeys-lru}",
+      ]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  # PostgreSQL 数据库
+  ordo-postgres:
+    image: postgres:15
+    restart: unless-stopped
+    logging: *docker_logging
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-ordo}
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+    command:
+      [
+        "postgres",
+        "-c",
+        "shared_buffers=${POSTGRES_SHARED_BUFFERS:-256MB}",
+        "-c",
+        "work_mem=${POSTGRES_WORK_MEM:-16MB}",
+        "-c",
+        "maintenance_work_mem=${POSTGRES_MAINTENANCE_WORK_MEM:-128MB}",
+      ]
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Milvus Etcd (元数据存储)
+  ordo-etcd:
+    # quay.io can be unreachable in some networks; use a public mirror image instead.
+    image: registry.k8s.io/etcd:3.5.5-0
+    restart: unless-stopped
+    logging: *docker_logging
+    environment:
+      - ETCD_AUTO_COMPACTION_MODE=revision
+      - ETCD_AUTO_COMPACTION_RETENTION=1000
+      - ETCD_QUOTA_BACKEND_BYTES=4294967296
+      - ETCD_SNAPSHOT_COUNT=50000
+      - ETCDCTL_API=3
+    volumes:
+      - etcd_data:/etcd
+    command: etcd -advertise-client-urls=http://ordo-etcd:2379 -listen-client-urls=http://0.0.0.0:2379 --data-dir /etcd
+    healthcheck:
+      test: ["CMD", "etcdctl", "endpoint", "health"]
+      interval: 30s
+      timeout: 20s
+      retries: 3
+
+  # Milvus MinIO (对象存储)
+  ordo-minio:
+    image: minio/minio:RELEASE.2023-03-20T20-16-18Z
+    restart: unless-stopped
+    logging: *docker_logging
+    environment:
+      # Modern env names (also keep the old ones for compatibility with older images).
+      MINIO_ROOT_USER: ${MINIO_ACCESS_KEY_DOCKER:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${MINIO_SECRET_KEY_DOCKER:-minioadmin}
+      MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY_DOCKER:-minioadmin}
+      MINIO_SECRET_KEY: ${MINIO_SECRET_KEY_DOCKER:-minioadmin}
+    volumes:
+      - minio_data:/minio_data
+    command: minio server /minio_data --console-address ":9001"
+    healthcheck:
+      test: ["CMD", "curl", "--noproxy", "*", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 30s
+      timeout: 20s
+      retries: 3
+
+  # Milvus 向量数据库
+  ordo-milvus:
+    image: ${MILVUS_IMAGE:-milvusdb/milvus:v2.6.11}
+    restart: unless-stopped
+    logging: *docker_logging
+    command: ["milvus", "run", "standalone"]
+    security_opt:
+      - seccomp:unconfined
+    environment:
+      ETCD_ENDPOINTS: ordo-etcd:2379
+      MINIO_ADDRESS: ordo-minio:9000
+    volumes:
+      - milvus_data:/var/lib/milvus
+    healthcheck:
+      test: ["CMD", "curl", "--noproxy", "*", "-f", "http://localhost:9091/healthz"]
+      interval: 30s
+      start_period: 90s
+      timeout: 20s
+      retries: 3
+    depends_on:
+      ordo-etcd:
+        condition: service_healthy
+      ordo-minio:
+        condition: service_healthy
+
+  # FastAPI 后端
+  ordo-api:
+    build: *backend_build
+    restart: unless-stopped
+    logging: *docker_logging
+    ports:
+      - "${BACKEND_PORT:-8000}:8000"
+    healthcheck:
+      test: ["CMD", "curl", "--noproxy", "*", "-fsS", "http://localhost:8000/api/v1/health/ready"]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+      # Empty databases can spend several minutes creating the initial schema.
+      start_period: ${API_HEALTHCHECK_START_PERIOD:-240s}
+    depends_on:
+      ordo-postgres:
+        condition: service_healthy
+      ordo-milvus:
+        condition: service_healthy
+      ordo-redis:
+        condition: service_healthy
+    env_file:
+      - ../.env
+    environment:
+      <<: *backend_env
+      TABLE_STORE_DIR: /data/uploads/table_store
+      FORWARDED_ALLOW_IPS: ${FORWARDED_ALLOW_IPS_DOCKER:-127.0.0.1,172.30.0.10}
+    networks:
+      - default
+      - ordo-proxy
+    volumes:
+      - upload_data:/data/uploads
+      - ../plugins:/app/plugins:ro
+      # Reuse the MinerU/PDF-Extract-Kit cache for MagicPDF local parsing.
+      # Mounted read-only; populate/update it via the optional mineru parser service.
+      - mineru_cache:/opt/ordo-model-cache:ro
+
+  # Arq worker（后台处理文档解析/索引）
+  ordo-worker:
+    build: *backend_build
+    restart: unless-stopped
+    logging: *docker_logging
+    healthcheck:
+      test: ["CMD", "arq", "--check", "app.tasks.queue.WorkerHealthSettings"]
+      interval: ${WORKER_HEALTHCHECK_INTERVAL:-15s}
+      timeout: ${WORKER_HEALTHCHECK_TIMEOUT:-5s}
+      retries: ${WORKER_HEALTHCHECK_RETRIES:-3}
+      start_period: ${WORKER_HEALTHCHECK_START_PERIOD:-45s}
+    depends_on:
+      ordo-redis:
+        condition: service_healthy
+      ordo-postgres:
+        condition: service_healthy
+      ordo-milvus:
+        condition: service_healthy
+    env_file:
+      - ../.env
+    environment:
+      <<: *backend_env
+      TABLE_STORE_DIR: /data/uploads/table_store
+    volumes:
+      - upload_data:/data/uploads
+      - ../plugins:/app/plugins:ro
+      # Worker runs persisted ingestion; it needs the same local MagicPDF models.
+      - mineru_cache:/opt/ordo-model-cache:ro
+    command: arq app.tasks.worker.WorkerSettings
+
+volumes:
+  # PostgreSQL data dir (/var/lib/postgresql/data)
+  postgres_data:
+  # Milvus metadata store (etcd)
+  etcd_data:
+  # Milvus object store (minio)
+  minio_data:
+  # Milvus vector data dir (/var/lib/milvus)
+  milvus_data:
+  # Uploaded documents + derived artifacts (/data/uploads)
+  upload_data:
+  # Shared MinerU/PDF-Extract-Kit model cache, also used by MagicPDF local parser.
+  mineru_cache:
+
+networks:
+  ordo-proxy:
+    ipam:
+      config:
+        - subnet: ${ORDO_PROXY_SUBNET:-172.30.0.0/24}

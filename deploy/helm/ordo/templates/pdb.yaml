@@ -1,0 +1,39 @@
+{{- if and .Values.api.enabled .Values.api.pdb.enabled }}
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "ordo.fullname" . }}-api
+  labels:
+    {{- include "ordo.labels" . | nindent 4 }}
+spec:
+  selector:
+    matchLabels:
+      {{- include "ordo.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: api
+  {{- if .Values.api.pdb.maxUnavailable }}
+  maxUnavailable: {{ .Values.api.pdb.maxUnavailable }}
+  {{- else }}
+  minAvailable: {{ .Values.api.pdb.minAvailable }}
+  {{- end }}
+{{- end }}
+
+{{- if and .Values.worker.enabled .Values.worker.pdb.enabled }}
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "ordo.fullname" . }}-worker
+  labels:
+    {{- include "ordo.labels" . | nindent 4 }}
+spec:
+  selector:
+    matchLabels:
+      {{- include "ordo.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: worker
+  {{- if .Values.worker.pdb.maxUnavailable }}
+  maxUnavailable: {{ .Values.worker.pdb.maxUnavailable }}
+  {{- else }}
+  minAvailable: {{ .Values.worker.pdb.minAvailable }}
+  {{- end }}
+{{- end }}
+

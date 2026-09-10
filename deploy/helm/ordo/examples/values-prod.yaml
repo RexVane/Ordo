@@ -1,0 +1,172 @@
+# Example: production baseline Helm values for Ordo.
+#
+# Usage:
+#   helm upgrade --install ordo deploy/helm/ordo -n ordo -f deploy/helm/ordo/examples/values-prod.yaml
+#
+# Notes:
+# - This is the production starting point, not a dev convenience profile.
+# - Pair it with an externally managed Secret that provides strong Postgres/MinIO
+#   credentials plus `SECRET_KEY`, `JWT_TENANT_CLAIM`, and `CORS_ORIGINS`.
+# - Upload dedup + distributed admission are intentionally enabled here so the
+#   production baseline reuses the Redis-backed concurrency/idempotency guards.
+# - Ingress/TLS and NetworkPolicy egress allowlists are explicit here so production
+#   installs do not silently inherit the chart's permissive defaults.
+
+image:
+  repository: "<your-registry>/ordo"
+  tag: "<tag>"
+
+# Prefer creating this Secret outside Helm (Vault/ESO/KMS) and referencing it here.
+existingSecretName: "ordo-env"
+
+ingress:
+  enabled: true
+  className: "nginx"
+  hosts:
+    - host: "ordo.example.com"
+      paths:
+        - path: /
+          pathType: Prefix
+  tls:
+    - secretName: "ordo-example-com-tls"
+      hosts:
+        - "ordo.example.com"
+
+api:
+  replicas: 2
+  # Multi-replica APIs must share rate-limit state. Use Postgres lexical
+  # retrieval to avoid rebuilding the same in-memory BM25 index in every pod.
+  extraEnv:
+    - name: ENV
+      value: "production"
+    - name: DB_CREATE_ALL_ON_STARTUP
+      value: "false"
+    - name: DB_RUNTIME_MIGRATIONS_ENABLED
+      value: "false"
+    - name: RATE_LIMIT_REDIS_ENABLED
+      value: "true"
+    - name: BM25_INDEX_ENABLED
+      value: "false"
+    - name: SEMANTIC_CACHE_ENABLED
+      value: "true"
+    - name: UPLOAD_DEDUP_ENABLED
+      value: "true"
+    - name: RAG_RETRIEVAL_DISTRIBUTED_ADMISSION_ENABLED
+      value: "true"
+    - name: RAG_RETRIEVAL_DISTRIBUTED_ADMISSION_MAX_CONCURRENCY
+      value: "3"
+
+worker:
+  replicas: 2
+  extraEnv:
+    - name: ENV
+      value: "production"
+    - name: DB_CREATE_ALL_ON_STARTUP
+      value: "false"
+    - name: DB_RUNTIME_MIGRATIONS_ENABLED
+      value: "false"
+    - name: SEMANTIC_CACHE_ENABLED
+      value: "true"
+    - name: UPLOAD_DEDUP_ENABLED
+      value: "true"
+    - name: RAG_RETRIEVAL_DISTRIBUTED_ADMISSION_ENABLED
+      value: "true"
+    - name: RAG_RETRIEVAL_DISTRIBUTED_ADMISSION_MAX_CONCURRENCY
+      value: "3"
+
+# Validation hints for the chart. Keep these aligned with the external Secret.
+runtimeGuards:
+  environment: "production"
+  vectorBackend: "milvus"
+  minioEnabled: "true"
+  minioDocumentsEnabled: "true"
+  dbCreateAllOnStartup: "false"
+  dbRuntimeMigrationsEnabled: "false"
+
+networkPolicy:
+  enabled: true
+  api:
+    ingress:
+      allowSameNamespace: false
+      extraFrom:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: ingress-nginx
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: ingress-nginx
+  worker:
+    ingress:
+      allowSameNamespace: false
+      extraFrom: []
+  egress:
+    restrict: true
+    allowDNS: true
+    rules:
+      - to:
+          - namespaceSelector:
+              matchLabels:
+                kubernetes.io/metadata.name: data
+            podSelector:
+              matchLabels:
+                app.kubernetes.io/name: postgres
+        ports:
+          - protocol: TCP
+            port: 5432
+      - to:
+          - namespaceSelector:
+              matchLabels:
+                kubernetes.io/metadata.name: data
+            podSelector:
+              matchLabels:
+                app.kubernetes.io/name: redis
+        ports:
+          - protocol: TCP
+            port: 6379
+      - to:
+          - namespaceSelector:
+              matchLabels:
+                kubernetes.io/metadata.name: data
+            podSelector:
+              matchLabels:
+                app.kubernetes.io/name: milvus
+        ports:
+          - protocol: TCP
+            port: 19530
+      - to:
+          - namespaceSelector:
+              matchLabels:
+                kubernetes.io/metadata.name: data
+            podSelector:
+              matchLabels:
+                app.kubernetes.io/name: minio
+        ports:
+          - protocol: TCP
+            port: 9000
+      - to:
+          - ipBlock:
+              cidr: 198.51.100.10/32
+        ports:
+          - protocol: TCP
+            port: 443
+
+persistence:
+  uploads:
+    enabled: true
+    size: 50Gi
+
+migrations:
+  enabled: true
+
+cronjobs:
+  semanticCacheRetention:
+    enabled: true
+    schedule: "17 * * * *"
+    allTenants: true
+    execute: true
+    maxScan: 1000
+    maxDelete: 100
+
+prometheus:
+  serviceMonitor:
+    enabled: true
