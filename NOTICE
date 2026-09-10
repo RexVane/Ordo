@@ -7,10 +7,9 @@ licenses of that software. This NOTICE file is provided for informational
 purposes and, per Apache License 2.0 Section 4(d), must be retained in
 redistributions of this Work or Derivative Works.
 
-The original contributions in this repository are licensed under the MIT
-License (see the top-level LICENSE file). The third-party-derived
-components listed below remain under the Apache License, Version 2.0; a
-copy is provided in LICENSE-APACHE-2.0.
+The original contributions in this repository are licensed under the Apache
+License, Version 2.0 (see the top-level LICENSE file). The third-party-derived
+components listed below remain under their own upstream licenses as noted.
 
 ================================================================================
 1. Upstream Base: MimirQ (Apache License 2.0)
@@ -23,7 +22,7 @@ Version 2.0:
   Copyright 2026 skygazer42
 
   Licensed under the Apache License, Version 2.0. A copy of the Apache License
-  is provided in LICENSE-APACHE-2.0.
+  is provided in the top-level LICENSE file of this distribution.
 
 ================================================================================
 2. RAGFlow / DeepDoc  (Apache License 2.0)
@@ -41,7 +40,7 @@ under the Apache License, Version 2.0:
   Copyright 2025 The InfiniFlow Authors
 
   Licensed under the Apache License, Version 2.0. A copy of the Apache License
-  is provided in LICENSE-APACHE-2.0. The original
+  is provided in the top-level LICENSE file of this distribution. The original
   source is available at https://github.com/infiniflow/ragflow.
 
   Modifications may have been made to the original files. Files carrying an
