@@ -21,7 +21,7 @@
 - `web/app/knowledge/ingestion/operation-page-client.tsx` — production composer and cleanup
 - `web/app/knowledge/ingestion/operation-page-client.source.test.ts` — layout and capability contracts
 - `web/app/knowledge/ingestion/operation-page-client.behavior.test.tsx` — rendered source/mode/submit behavior coverage
-- `DESIGN_MEMORY.md` — durable product-design constraints
+- `docs/design/design-memory.md` — durable product-design constraints
 
 ## Required UI States
 
