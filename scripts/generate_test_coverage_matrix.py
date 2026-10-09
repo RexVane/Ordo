@@ -81,7 +81,7 @@ def _parse_frontend_pages(repo_root: Path) -> list[dict[str, str]]:
             continue
         pages.append(
             {
-                "file": str(page.relative_to(repo_root)),
+                "file": page.relative_to(repo_root).as_posix(),
                 "route": _normalize_frontend_route(app_root, page),
             }
         )
@@ -97,7 +97,7 @@ def _collect_tests(
     list[dict[str, str]],
 ]:
     backend_tests = [
-        {"file": str(path.relative_to(repo_root))}
+        {"file": path.relative_to(repo_root).as_posix()}
         for path in sorted((repo_root / "tests").rglob("test_*.py"))
         if path.is_file()
     ]
@@ -109,17 +109,17 @@ def _collect_tests(
         if "e2e" not in path.parts
     ]
     frontend_tests = [
-        {"file": str(path.relative_to(repo_root))}
+        {"file": path.relative_to(repo_root).as_posix()}
         for path in frontend_test_paths
         if not any(marker in path.name for marker in SOURCE_CONTRACT_TEST_MARKERS)
     ]
     frontend_source_contract_tests = [
-        {"file": str(path.relative_to(repo_root))}
+        {"file": path.relative_to(repo_root).as_posix()}
         for path in frontend_test_paths
         if any(marker in path.name for marker in SOURCE_CONTRACT_TEST_MARKERS)
     ]
     playwright_specs = [
-        {"file": str(path.relative_to(repo_root))}
+        {"file": path.relative_to(repo_root).as_posix()}
         for path in _iter_files(frontend_root / "e2e", ("*.spec.ts", "*.spec.tsx"))
     ]
     return backend_tests, frontend_tests, frontend_source_contract_tests, playwright_specs

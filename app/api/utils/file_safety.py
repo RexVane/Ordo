@@ -11,8 +11,6 @@ Both return a human-safe rejection reason, or ``None`` when the file passes
 (or the format has no fingerprint rule yet — extension allowlist still gates).
 """
 
-from __future__ import annotations
-
 import zipfile
 from pathlib import Path
 

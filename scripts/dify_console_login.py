@@ -172,7 +172,10 @@ def _write_private_text(path: Path, text: str) -> None:
     flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC | getattr(os, "O_NOFOLLOW", 0)
     fd = os.open(path, flags, 0o600)
     try:
-        os.fchmod(fd, 0o600)
+        if hasattr(os, "fchmod"):
+            os.fchmod(fd, 0o600)
+        else:  # Windows has no fchmod; os.chmod still applies the read-only bit
+            os.chmod(path, 0o600)
         with os.fdopen(fd, "w", encoding="utf-8") as file_obj:
             fd = -1
             file_obj.write(text)

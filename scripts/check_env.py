@@ -18,11 +18,9 @@ Usage:
     python scripts/check_env.py [--env-file .env] [--example .env.example]
 """
 
-from __future__ import annotations
 
 import argparse
 import re
-import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 

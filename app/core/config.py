@@ -37,7 +37,6 @@ _COMMA_OR_WHITESPACE_RE = r"[,\\s]+"
 _LEGACY_DEV_SECRET_KEY = "".join(("your-secret-key", "-change-in-production"))
 _LOCAL_MINIO_DEFAULT_CREDENTIAL = "".join(("minio", "admin"))
 _ALL_INTERFACES_HOST = str(ipaddress.IPv4Address(0))
-_JWT_LOCAL_HOSTS = frozenset({"localhost", "localhost.localdomain", "127.0.0.1", "::1"})
 _OBJECT_STORAGE_PROVIDER_ALIASES = {
     "": "minio",
     "minio": "minio",
@@ -104,19 +103,6 @@ def _should_disable_repo_env_file() -> bool:
     return "pytest" in argv0
 
 
-def _is_local_jwt_http_host(host: str) -> bool:
-    normalized = str(host or "").strip().lower()
-    if not normalized:
-        return False
-    if normalized in _JWT_LOCAL_HOSTS or normalized.endswith(".localhost"):
-        return True
-    try:
-        ip = ipaddress.ip_address(normalized)
-    except ValueError:
-        return False
-    return bool(ip.is_loopback)
-
-
 def validate_jwt_remote_url(raw_url: str, *, field_name: str) -> None:
     url = str(raw_url or "").strip()
     if not url:
@@ -131,7 +117,7 @@ def validate_jwt_remote_url(raw_url: str, *, field_name: str) -> None:
         raise ValueError(f"{field_name} must not include userinfo")
     if scheme == "https":
         return
-    if not is_production_env() and _is_local_jwt_http_host(host):
+    if not is_production_env() and _settings_validation.is_local_jwt_http_host(host):
         return
     raise ValueError(f"{field_name} must use https")
 

@@ -38,6 +38,22 @@ _LOCAL_MINIO_DEFAULT_CREDENTIAL = None
 _DEFAULT_RAG_EVAL_SUMMARY_PATH = None
 
 
+JWT_LOCAL_HOSTS = frozenset({"localhost", "localhost.localdomain", "127.0.0.1", "::1"})
+
+
+def is_local_jwt_http_host(host: str) -> bool:
+    normalized = str(host or "").strip().lower()
+    if not normalized:
+        return False
+    if normalized in JWT_LOCAL_HOSTS or normalized.endswith(".localhost"):
+        return True
+    try:
+        ip = ipaddress.ip_address(normalized)
+    except ValueError:
+        return False
+    return bool(ip.is_loopback)
+
+
 def _set_if_changed(settings, field_name, value):
     if getattr(settings, field_name) != value:
         setattr(settings, field_name, value)

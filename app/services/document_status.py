@@ -17,7 +17,6 @@ Stdlib-only and DB-free: operates on any object with attribute access, so it
 is unit-testable without the backend dependency tree.
 """
 
-from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import Any

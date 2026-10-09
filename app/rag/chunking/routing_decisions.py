@@ -8,8 +8,6 @@ selection as input, so it cannot diverge from the actual router.
 Stdlib-only, no app imports.
 """
 
-from __future__ import annotations
-
 from dataclasses import dataclass
 from typing import Any
 

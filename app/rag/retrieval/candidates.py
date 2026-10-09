@@ -17,8 +17,6 @@ Stdlib-only and import-light: no app-internal imports, unit-testable anywhere.
 ``SCHEMA_VERSION`` must be bumped whenever fields change incompatibly.
 """
 
-from __future__ import annotations
-
 from dataclasses import asdict, dataclass, field
 from typing import Any
 

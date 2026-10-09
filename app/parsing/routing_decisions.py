@@ -8,9 +8,7 @@ from :func:`app.parsing.routing.choose_pdf_backend`.
 Stdlib-only, no app imports.
 """
 
-from __future__ import annotations
-
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any
 
 SCHEMA_VERSION = "ordo.parsing.routing_decision.v1"

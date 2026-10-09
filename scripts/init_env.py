@@ -124,7 +124,7 @@ def _fill_proxy_secret(repo_root: Path) -> bool:
     env_path = repo_root / ".env"
     for path in (env_path, repo_root / "web" / ".env.local"):
         if path.exists() and _ensure_secret(path, key="MARKDOWN_IMAGE_PROXY_SECRET", value=proxy_secret):
-            print(f"[init-env] filled MARKDOWN_IMAGE_PROXY_SECRET in {path.relative_to(repo_root)}")
+            print(f"[init-env] filled MARKDOWN_IMAGE_PROXY_SECRET in {path.relative_to(repo_root).as_posix()}")
             wrote_any = True
     return wrote_any
 
