@@ -74,7 +74,7 @@ See [`docs/architecture.md`](./docs/architecture.md) and [`docs/backend_structur
 ### 1. Clone & initialize
 
 ```bash
-git clone <your-repo-url>
+git clone --depth 1 --single-branch <your-repo-url>
 cd <repo>
 make init
 ```
@@ -124,6 +124,24 @@ See [`docs/quickstart.md`](./docs/quickstart.md) and [`docs/user_guide.md`](./do
 | `make doctor` | Environment sanity checks |
 | `make clean` | Remove local build caches and compiled artifacts |
 | `make config-check` | Validate `.env` against `.env.example` |
+| `make down` | Stop all Compose stacks (keeps data volumes) |
+| `make docker-reset` | Stop all Compose stacks and delete their volumes (**irreversible**) |
+| `make docker-purge` | Same as `docker-reset`, and also remove the images (**irreversible**) |
+
+### Optional parsers
+
+Start an external parser service only when you need it, using its Compose profile:
+
+| Command | Description |
+|---|---|
+| `make up-etl4llm` | Start the ETL4LLM parser (profile `etl4llm`) |
+| `make up-marker` | Start the Marker parser (profile `marker`) |
+| `make up-paddlevl` | Start the PaddleVL parser (profile `paddlevl`) |
+| `make up-mineru` | Start the MinerU parser (profile `mineru`) |
+| `make up-mineru-vlm` | Start MinerU with the VLM model (profiles `mineru` + `mineru-vlm`) |
+| `make up-olmocr` | Start the olmOCR parser (profile `olmocr`) |
+| `make up-magicpdf` | Start the MagicPDF parser (profile `magicpdf`) |
+| `make up-qianfanocr` | Start the Qianfan OCR parser (profile `qianfanocr`) |
 
 Full list: `make help`.
 

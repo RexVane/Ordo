@@ -74,7 +74,7 @@
 ### 1. 克隆与初始化
 
 ```bash
-git clone <your-repo-url>
+git clone --depth 1 --single-branch <your-repo-url>
 cd <repo>
 make init
 ```
@@ -96,7 +96,7 @@ make up-web
 
 首次启动前可在 `.env` 中设置 `INITIAL_ADMIN_EMAIL` / `INITIAL_ADMIN_USERNAME` / `INITIAL_ADMIN_PASSWORD`（或 `INITIAL_ADMIN_PASSWORD_FILE`）自动创建初始管理员；弱密码会被拒绝启动，生产环境请使用强密码并在首次登录后轮换。
 
-**方式二：本地源码开发模式**
+**方式二：本地源码运行（Python venv + pip + pnpm）**
 
 ```bash
 # 安装依赖并启动 Docker 基础设施（PostgreSQL、Redis、Milvus、MinIO 等）
@@ -124,6 +124,24 @@ make web
 | `make doctor` | 环境自检 |
 | `make clean` | 清理本地构建缓存与编译产物 |
 | `make config-check` | 校验 `.env` 与 `.env.example` 是否一致 |
+| `make down` | 停止全部 Compose 栈（保留数据卷） |
+| `make docker-reset` | 停止全部 Compose 栈并删除其数据卷（**不可恢复**） |
+| `make docker-purge` | 同 `docker-reset`，并删除镜像（**不可恢复**，之后需重新拉取或构建） |
+
+### 可选解析器
+
+需要外部解析服务时，按对应的 Compose profile 启动：
+
+| 命令 | 说明 |
+|---|---|
+| `make up-etl4llm` | 启动 ETL4LLM 解析器（profile `etl4llm`） |
+| `make up-marker` | 启动 Marker 解析器（profile `marker`） |
+| `make up-paddlevl` | 启动 PaddleVL 解析器（profile `paddlevl`） |
+| `make up-mineru` | 启动 MinerU 解析器（profile `mineru`） |
+| `make up-mineru-vlm` | 启动 MinerU 并附加 VLM 模型（profile `mineru` + `mineru-vlm`） |
+| `make up-olmocr` | 启动 olmOCR 解析器（profile `olmocr`） |
+| `make up-magicpdf` | 启动 MagicPDF 解析器（profile `magicpdf`） |
+| `make up-qianfanocr` | 启动千帆 OCR 解析器（profile `qianfanocr`） |
 
 完整目标列表：`make help`。
 
@@ -149,9 +167,10 @@ make web
 ## 📚 文档导航
 
 - 入门：[`docs/quickstart.md`](./docs/quickstart.md)
-- 全流程操作：[`docs/user_guide.md`](./docs/user_guide.md)
+- [完整操作指南](./docs/user_guide.md)：从部署、建库、入库、解析、切块、检索、问答到评测和运维
 - 架构：[`docs/architecture.md`](./docs/architecture.md)
 - 部署：[`docs/deployment/`](./docs/deployment/)
+- [Docker Compose 部署指南](./docs/deployment/docker_compose.md)
 - 集成：[`docs/integration/`](./docs/integration/)
 - 发版记录：[`docs/releases/`](./docs/releases/)
 
