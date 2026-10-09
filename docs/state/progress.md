@@ -55,3 +55,21 @@
   - 还原任一文件：从 `backups/<原路径>` 移回，或 `git show 22c24fa^:<路径>`
   - 待用户决定：CRLF 工作区是否统一（`git add --renormalize` 或重新检出，都会改动工作区文件，需先确认）；是否安装 dev 依赖后跑 pytest
   - 仍未处理：`.pnpm-store/` 位置、`tests/`（405 个）和剩余 `scripts/` 的平铺结构、`docs/` 下 129 个未被链接的文档
+
+## 2026-10-09 11:00 +08:00 | claude-haiku-5-5 | 环境收尾、文档校正与全量测试
+- 改了什么：
+  - 换行符：859 个 `.gitattributes` 声明 `eol=lf` 但工作区为 CRLF 的文件转为 LF，只改工作区，索引内容不变。逐个用 `git hash-object`（经过 clean 过滤）与索引 blob 比对，0 处差异；随后 `git add` 刷新 stat 缓存，`git status` 为空。原因：`chunk-preview-dataset-scope` 与 `retrieve-preview-panel` 两个 source 测试断言 LF，修复后前端测试全部通过
+  - `.pnpm-store/`（约 985 MB）移到 `backups/.pnpm-store`，同盘重命名，硬链接保留。全局库 `D:\.pnpm-store\v10` 已存在，之后 `pnpm install` 会改用全局库，可能需要重新链接 `web/node_modules`
+  - 安装 `requirements-dev.txt` 到 `.venv`（pytest 9.0.3 等）。收集到 3185 个测试，全部可导入
+  - 文档：重写 `docs/backend_structure.md`（提交 `aec8167`）。删除不存在的目录，修正迁移对照表中的 4 个新路径，示例签名与代码对齐（`stream_chat`、`run_rag_graph`、`get_chunker`、`RAGAgent`），测试命令改为平铺结构。全部路径与导入经脚本核对
+  - 测试在仓库根生成空目录 `vector_chroma`（`CHROMA_PERSIST_PATH` 默认 `./vector_chroma`），已移入 `backups/vector_chroma`。下次跑测试还会再生成，建议测试改用临时目录（本次未改代码）
+- 测试结果：
+  - 全量 pytest（`-n 4`）：3133 通过、14 跳过、38 失败。38 条在清理前提交 `cfd5631` 的导出快照上同样失败，属于原有问题，不是本次清理引入。主要原因：未设置 `OPENAI_API_KEY`；测试里写死 `/data/temp34/Ordo` 路径；Windows 路径分隔符和编码差异（`utf-8:surrogateescape`、缺少 `os.getpgid`、`os.fchmod`）；README 与契约测试不一致；`app/core/config.py` 2552 行超出预算 2550；alembic 期望 head 为 `0027`，实际为 `0028_user_login_lockout`
+  - 前端 vitest：128 个文件、423 个测试全部通过
+  - `pnpm typecheck` 通过（最终状态重跑）；`import app.main` 成功（425 条路由）
+  - 依赖图谱：生产可达的 Python 文件数不变（1335），断裂导入 0
+- 影响文件：859 个工作区文件（换行符）；`docs/backend_structure.md`；`.pnpm-store/` 与 `vector_chroma/` 移入 `backups/`；`docs/state/progress.md`
+- 下一步：
+  - 待用户确认：`tests/`（405 个）与 `scripts/` 平铺结构是否按域拆分（按规则需先确认）
+  - 38 条原有失败：补测试用的假 key，去掉写死的路径，修 Windows 兼容，对齐 README 与契约测试，调整 `config.py` 预算，更新 alembic head 期望值
+  - 测试的持久化路径改到临时目录，避免每次在根目录生成 `vector_chroma`
