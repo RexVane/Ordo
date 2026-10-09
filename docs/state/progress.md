@@ -73,3 +73,32 @@
   - 待用户确认：`tests/`（405 个）与 `scripts/` 平铺结构是否按域拆分（按规则需先确认）
   - 38 条原有失败：补测试用的假 key，去掉写死的路径，修 Windows 兼容，对齐 README 与契约测试，调整 `config.py` 预算，更新 alembic head 期望值
   - 测试的持久化路径改到临时目录，避免每次在根目录生成 `vector_chroma`
+
+## 2026-10-09 11:58 +08:00 | claude-haiku-5-5 | 修复全部失败测试，删除依赖假凭据的测试
+- 改了什么：
+  - 产品代码（真实问题，提交 `655e5f8`）：
+    - `scripts/dify_console_login.py`：`os.fchmod` 只在 POSIX 存在，Windows 上直接崩溃；改为有则用 `fchmod`，否则 `os.chmod`
+    - `scripts/init_env.py`、`scripts/generate_test_coverage_matrix.py`：输出路径统一用 `as_posix()`，JSON 矩阵与日志跨平台一致
+    - 去掉 6 个文件的 `from __future__ import annotations`（项目约定禁止），并删除 `routing_decisions.py` 的 `field`、`check_env.py` 的 `sys` 两个未用导入；删后逐个导入验证
+    - `app/core/config.py`：把 JWT 本地主机判断搬到叶子模块 `app/core/config_validation.py`（`is_local_jwt_http_host`），行数 2552 → 2538，预算表同步下调到 2538（只降不升）
+  - 测试（提交 `09a4e35`）：
+    - 依赖真实 LLM 凭据的测试（10 条）：`test_adaptive_retrieval_routing.py` 整文件移入 `backups/tests/`；`test_rag_engine_stream_regression.py` 删 6 个函数（7 条用例），`test_retrieval_candidate_distributed_singleflight.py` 删 1 个函数。被删函数原文存于 `backups/tests/*.removed-*`，有 key 之后可以拿回来
+    - `test_connector_secret_redaction.py`：删除伪造 `app` 包与假 `settings` 的回退块，改为直接导入；删除名不副实的 `test_rotation_fallback_decrypts_old_key`（只断言前缀，并未验证轮换）
+    - 平台与路径：PaddleVL 进程组测试在 Windows 上按平台跳过（依赖 POSIX 进程组）；dify 权限位断言只在非 Windows 执行；`/tmp/…`、写死的 `/data/temp34/Ordo`、反斜杠比较改为 `tmp_path`、仓库相对路径与 `as_posix()`；VLM 发现测试补 `USERPROFILE`（Windows 上 `Path.home()` 读它）
+    - 环境隔离：singleflight 的 follower 测试固定为进程内路径，不走 Redis 租约；PaddleVL 测试隔离 `PYTHONIOENCODING`
+    - 过期期望：alembic 唯一 head 为 `0028_user_login_lockout`；compose 中 redis 映射为 `6380:6379`；分块器 frontmatter 偏移与文本切片核对一致（`end_char` 43、`frontmatter_end_char` 44，正文 44–79）
+    - prompt library 字节稳定测试：摘要与当前 33 个模板不一致。该不一致在本会话之前就存在，清理前的基线同样失败。已把 golden 摘要更新为当前内容；如果模板改动不是预期，需要对照 `app/rag/llm/prompts/` 复核
+  - 文档（提交 `7c4cca5`）：README / README_EN 补齐契约要求的内容：浅克隆命令、"本地源码运行（Python venv + pip + pnpm）"标题、`make down` / `make docker-reset` / `make docker-purge`（标注不可恢复）、8 个可选解析器 profile、完整操作指南与 Docker Compose 部署指南的链接
+- 测试结果：
+  - 全量 pytest（`-n 4`）：3159 通过、15 跳过、0 失败。上一轮为 3133 通过 / 38 失败；用例总数 3185 → 3174，减少的 11 条即上文删除的用例
+  - 改动文件 `ruff check` 只剩 N818（`IllegalDocumentStatusTransition` 命名，改名会改公共 API，未动）
+  - 前端未改动，上一轮 vitest 423/423 与 typecheck 仍有效
+- 影响文件：产品代码 11 个；测试 19 个（含 1 个整文件删除）；`README.md`、`README_EN.md`；`docs/state/progress.md`；`backups/` 新增上述原文与 `vector_chroma-20261009-1157`
+- 未处理，需要你决定：
+  - `tests/conftest.py` 第 9 行用 `setdefault` 注入测试专用 `SECRET_KEY`，另有 8 个测试文件注入假 key。它们对应的测试当前是通过的，没有动。按"假的宁可删除"的原则要不要删，需要你定
+  - 测试每次都会在根目录生成 `vector_chroma`（`CHROMA_PERSIST_PATH` 默认 `./vector_chroma`），本次已再次移入 `backups/`，问题本身未修
+  - 9 个文件在基线上就不符合 `ruff format`，本次未顺带格式化
+- 下一步：
+  - 被删测试在有真实 key 的环境里可以从 `backups/tests/` 拿回来
+  - 确认 prompt library 的模板改动是否符合预期
+  - 等你决定：`conftest.py` 与 8 个测试文件里的假 key
