@@ -642,6 +642,8 @@ async def test_chat_singleflight_follower_reacquires_after_leader_cancellation(
     import app.services.chat_cache_runtime as cache_runtime
     import app.services.chat_response_cache as cache
 
+    # Pin the in-process path: no Redis lease, so a follower takes over the leader role directly.
+    monkeypatch.setattr(cache, "_get_redis_client", lambda: None)
     key = "chat-cancel-retry"
     cache.clear_inflight_chat_responses()
     monkeypatch.setattr(

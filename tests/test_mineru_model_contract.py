@@ -45,6 +45,7 @@ def test_pipeline_readiness_requires_current_ocr_models(tmp_path, monkeypatch):
 def test_vlm_discovery_uses_the_runtime_model_repository(tmp_path, monkeypatch):
     startup = _load_start_local_api()
     monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path))  # Path.home() reads USERPROFILE on Windows
     snapshot = (
         tmp_path
         / ".cache/huggingface/hub/models--opendatalab--MinerU2.5-Pro-2605-1.2B/snapshots/revision"

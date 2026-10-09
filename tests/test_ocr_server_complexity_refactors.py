@@ -4,6 +4,7 @@ import io
 import shutil
 import signal
 import subprocess
+import sys
 import zipfile
 from pathlib import Path
 from typing import Any
@@ -250,6 +251,7 @@ async def test_olmocr_convert_maps_pipeline_timeout_to_504(monkeypatch: pytest.M
     assert exc_info.value.detail == "olmocr_pipeline_timeout"
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX process groups (os.getpgid/os.killpg)")
 def test_paddlevl_terminate_process_group_escalates_to_sigkill(monkeypatch: pytest.MonkeyPatch) -> None:
     proc = _FakePopen()
     kill_calls: list[tuple[int, signal.Signals]] = []
@@ -264,6 +266,8 @@ def test_paddlevl_terminate_process_group_escalates_to_sigkill(monkeypatch: pyte
 
 
 def test_paddlevl_run_doc_parser_builds_expected_command(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    # The server only setdefaults PYTHONIOENCODING, so pin the host's value out of the expectation.
+    monkeypatch.delenv("PYTHONIOENCODING", raising=False)
     captured: dict[str, Any] = {}
 
     class _SuccessProcess:

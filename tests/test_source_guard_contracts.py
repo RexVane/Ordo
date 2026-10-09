@@ -101,7 +101,7 @@ REQUESTS_GUARD_PATHS = (
 MODULE_LINE_BUDGETS = {
     "app/api/v1/integrations_dify.py": 8000,
     "app/api/v1/pipeline.py": 1800,
-    "app/core/config.py": 2550,
+    "app/core/config.py": 2538,
     "app/parsing/processors/processor.py": 4750,
     "app/rag/engine.py": 4100,
     "app/rag/kg/api/routes.py": 2600,

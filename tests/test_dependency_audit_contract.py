@@ -40,7 +40,7 @@ def test_langchain_milvus_imports_stay_isolated_to_adapter_boundaries() -> None:
             if node.module != "langchain_community.vectorstores":
                 continue
             if any(alias.name == "Milvus" for alias in node.names):
-                matches.append(str(path.relative_to(ROOT)))
+                matches.append(path.relative_to(ROOT).as_posix())
                 break
 
     assert matches == ["app/storage/vector/milvus.py"]

@@ -9,7 +9,7 @@ from uuid import uuid4
 
 import pytest
 
-MODULE_PATH = Path("/data/temp34/Ordo/app/rag/evaluation/kg_search_diagnostics.py")
+MODULE_PATH = Path(__file__).resolve().parents[1] / "app" / "rag" / "evaluation" / "kg_search_diagnostics.py"
 
 
 class _SimpleModel:

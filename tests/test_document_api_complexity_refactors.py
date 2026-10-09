@@ -528,7 +528,7 @@ async def test_preview_document_subprocess_path_preserves_payload_and_cleanup_sa
         "parser_backend": "auto",
         "mode": "preview",
     }
-    assert str(worker_calls[0]["payload"]["file_path"]).endswith("/input.pdf")
+    assert Path(worker_calls[0]["payload"]["file_path"]).name == "input.pdf"
     assert str(worker_calls[0]["payload"]["file_path"]).startswith(str(upload_root / str(tenant_id) / "preview"))
     assert callable(worker_calls[0]["disconnect_check"])
     assert worker_calls[0]["timeout_sec"] == 45.0

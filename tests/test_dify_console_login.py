@@ -1,4 +1,5 @@
 import stat
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -24,4 +25,5 @@ def test_refresh_storage_state_restricts_token_file_permissions(tmp_path: Path) 
         request_json=request_json,
     )
 
-    assert stat.S_IMODE(state_path.stat().st_mode) == 0o600
+    if sys.platform != "win32":  # Windows only models the read-only bit, not POSIX mode bits
+        assert stat.S_IMODE(state_path.stat().st_mode) == 0o600

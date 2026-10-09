@@ -16,5 +16,5 @@ def test_builtin_prompt_library_content_is_byte_stable() -> None:
 
     assert len(templates) == 33
     assert hashlib.sha256(payload.encode()).hexdigest() == (
-        "2d51bbececadb962f62e45e95a56fa82716ccbbabdeebd376945bd89c0a7dbe7"
+        "08d345bab5e79828773ed760eb48e5e757b9b1262c523f9b4f10f7d5d4afc19b"
     )

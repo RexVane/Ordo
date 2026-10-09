@@ -466,5 +466,5 @@ def test_preprocess_image_document_image_pipeline_preserves_stage_order_and_arti
     assert result.meta["paddle_ocr_preprocess"] == {"backend": "paddle"}
     assert result.meta["handwriting_cleanup"] == {"backend": "heuristic"}
     assert result.meta["watermark_removal"] == {"backend": "http"}
-    assert result.meta["artifact_dir"].endswith("/.ordo_preprocess/photo_17")
+    assert Path(result.meta["artifact_dir"]).as_posix().endswith("/.ordo_preprocess/photo_17")
     assert Path(result.output_path).name == "photo.dewatermark.png"

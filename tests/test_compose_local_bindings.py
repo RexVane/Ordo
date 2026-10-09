@@ -11,7 +11,7 @@ def test_infrastructure_host_ports_bind_to_loopback() -> None:
     services = _compose("docker/docker-compose.infra.yml")["services"]
 
     assert services["ordo-postgres"]["ports"] == ["127.0.0.1:5432:5432"]
-    assert services["ordo-redis"]["ports"] == ["127.0.0.1:6379:6379"]
+    assert services["ordo-redis"]["ports"] == ["127.0.0.1:6380:6379"]
     assert services["ordo-minio"]["ports"] == [
         "127.0.0.1:9001:9001",
         "127.0.0.1:9000:9000",

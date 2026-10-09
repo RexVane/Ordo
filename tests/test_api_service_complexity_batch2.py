@@ -280,7 +280,7 @@ def test_get_document_parsed_content_uses_text_fallback_and_metadata(monkeypatch
     assert response.max_chars == 12
 
 
-def test_list_queryset_health_runs_filters_newest_first_and_timeseries(monkeypatch) -> None:
+def test_list_queryset_health_runs_filters_newest_first_and_timeseries(monkeypatch, tmp_path) -> None:
     from app.api.v1 import observability
 
     history = [
@@ -311,7 +311,10 @@ def test_list_queryset_health_runs_filters_newest_first_and_timeseries(monkeypat
 
     monkeypatch.setattr(observability, "_ensure_admin", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(
-        observability.settings, "QUERYSET_HEALTH_HISTORY_PATH", "/tmp/queryset-history.jsonl", raising=False
+        observability.settings,
+        "QUERYSET_HEALTH_HISTORY_PATH",
+        str(tmp_path / "queryset-history.jsonl"),
+        raising=False,
     )
     monkeypatch.setitem(sys.modules, "app.services.queryset_health_service", module)
 
@@ -324,7 +327,7 @@ def test_list_queryset_health_runs_filters_newest_first_and_timeseries(monkeypat
     )
 
     assert response.enabled is False
-    assert response.path == "/tmp/queryset-history.jsonl"
+    assert response.path == str(tmp_path / "queryset-history.jsonl")
     assert response.total == 2
     assert response.truncated is False
     assert [item["generated_at"] for item in response.items] == [
