@@ -1,7 +1,6 @@
 
-import sys
 from pathlib import Path
-from types import ModuleType, SimpleNamespace
+from types import SimpleNamespace
 
 import pytest
 from langchain_core.documents import Document
@@ -214,43 +213,31 @@ def test_table_cell_f1_treats_cells_as_multisets() -> None:
     assert table_cell_f1([], []) is None
 
 
-def test_detect_preprocess_info_collects_orientation_watermarks_and_closes_doc(
+def test_detect_preprocess_info_collects_orientation_and_watermarks(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
     class _Annot:
-        def __init__(self, annot_type: tuple[int, str], subject: str = "") -> None:
-            self.type = annot_type
-            self.info = {"subject": subject}
+        def __init__(self, subtype: str, contents: str = "") -> None:
+            self._data = {"/Subtype": subtype, "/Contents": contents}
+
+        def get(self, key: str, default: object = None) -> object:
+            return self._data.get(key, default)
 
     class _Page:
         def __init__(self, rotation: int, annots: list[_Annot]) -> None:
             self.rotation = rotation
-            self._annots = annots
+            self.annotations = annots
 
-        def annots(self) -> list[_Annot]:
-            return list(self._annots)
-
-    class _Doc:
-        def __init__(self) -> None:
-            self.page_count = 3
+    class _Reader:
+        def __init__(self, _path: str) -> None:
             self.pages = [
-                _Page(90, [_Annot((0, "Stamp"), "Watermark overlay")]),
+                _Page(90, [_Annot("/Stamp", "")]),
                 _Page(90, []),
                 _Page(0, []),
             ]
-            self.closed = False
 
-        def load_page(self, index: int) -> _Page:
-            return self.pages[index]
-
-        def close(self) -> None:
-            self.closed = True
-
-    fake_doc = _Doc()
-    fitz_module = ModuleType("fitz")
-    fitz_module.open = lambda _path: fake_doc  # type: ignore[attr-defined]
-    monkeypatch.setitem(sys.modules, "fitz", fitz_module)
+    monkeypatch.setattr("pypdf.PdfReader", _Reader)
 
     info = _detect_preprocess_info(tmp_path / "sample.pdf", sample_pages=2)
 
@@ -258,7 +245,6 @@ def test_detect_preprocess_info_collects_orientation_watermarks_and_closes_doc(
     assert info["rotation_counts"] == {"90": 2}
     assert info["watermark_annots"] == 1
     assert info["watermark_detected"] is True
-    assert fake_doc.closed is True
 
 
 def test_apply_metadata_exact_anchor_doc_ordering_promotes_exact_match() -> None:

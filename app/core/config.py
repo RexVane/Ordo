@@ -1583,7 +1583,7 @@ class Settings(BaseSettings):
     AGENT_LOG_INCLUDE_EXECUTION_PATH: bool = False
     AGENT_LOG_MAX_PREVIEW_CHARS: int = 500
 
-    VECTOR_BACKEND: Literal["milvus", "memory", "faiss", "chroma", "qdrant", "pgvector"] = "milvus"
+    VECTOR_BACKEND: Literal["milvus", "memory", "faiss", "chroma"] = "milvus"
     # Optional JSON object keyed by region -> backend, e.g. {"cn-shanghai":"qdrant"}.
     VECTOR_REGION_BACKENDS: str = ""
     # Indexing toggles (to reduce duplicate pipelines when desired)

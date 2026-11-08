@@ -6,6 +6,7 @@ Unified usage in:
 - Database parsing (documents/upload background processing)
 """
 
+import logging
 from pathlib import Path
 
 from app.core.config import settings
@@ -13,8 +14,6 @@ from app.parsing.backends import normalize_parser_backend
 from app.parsing.parsers.magic_pdf_parser import magicpdf_service_configured, resolve_magicpdf_models_dir
 from app.parsing.routing_decisions import explain_pdf_routing
 from app.parsing.utils.cli import resolve_cli_command
-
-import logging
 
 logger = logging.getLogger(__name__)
 

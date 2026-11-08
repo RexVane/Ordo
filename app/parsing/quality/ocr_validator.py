@@ -9,13 +9,14 @@ import tempfile
 from pathlib import Path
 from typing import Any
 
-import fitz  # PyMuPDF
 from PIL import Image
 from rapidocr_onnxruntime import RapidOCR
 
+from app.core.agpl_components import lazy_pymupdf
 from app.rag.core.logging import get_logger
 
 logger = get_logger("parsing.quality.ocr")
+fitz = lazy_pymupdf()
 
 
 class RapidOCRService:

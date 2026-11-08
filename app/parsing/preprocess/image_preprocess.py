@@ -19,9 +19,9 @@ from io import BytesIO
 from pathlib import Path
 from typing import Any
 
-import fitz
 from PIL import Image
 
+from app.core.agpl_components import lazy_pymupdf
 from app.core.config import settings
 from app.parsing.preprocess.deskew import deskew_via_http
 from app.parsing.preprocess.handwriting_cleanup import cleanup_handwriting_document
@@ -31,6 +31,7 @@ from app.parsing.preprocess.watermark import cleanup_watermark_document, strip_p
 from app.rag.core.logging import get_logger
 
 logger = get_logger("parsing.image_preprocess")
+fitz = lazy_pymupdf()
 
 
 _IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp"}

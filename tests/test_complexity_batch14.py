@@ -295,7 +295,7 @@ async def test_stream_graph_chat_events_preserve_event_order_and_result_contract
 
     monkeypatch.setattr(chat_tag_service, "build_chat_tag_context_docs", build_chat_tag_context_docs, raising=True)
     monkeypatch.setitem(sys.modules, "app.rag.pipelines.langgraph", fake_langgraph)
-    monkeypatch.setattr(chat_stream_graph.settings, "VECTOR_BACKEND", "pgvector", raising=False)
+    monkeypatch.setattr(chat_stream_graph.settings, "VECTOR_BACKEND", "chroma", raising=False)
 
     db = SimpleNamespace(rollback=lambda: rollback_calls.append("rollback"))
     request = SimpleNamespace(message="Where is it?", structured_output=False, structured_preset=None)

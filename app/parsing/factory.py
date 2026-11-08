@@ -244,7 +244,7 @@ class ParserFactory:
         return bool(settings.MINERU_ENABLED and (settings.MINERU_API_TOKEN or settings.MINERU_LOCAL_SERVER_URL))
 
     def _log_available_parsers(self) -> None:
-        logger.debug("[pdf] Basic PyMuPDF parser available (lazy)")
+        logger.debug("[pdf] Basic pdfplumber parser available (lazy)")
         availability_logs = (
             (
                 self._settings_enabled("MARKER_ENABLED", "MARKER_API_URL"),
@@ -1056,15 +1056,8 @@ class ParserFactory:
         if self._basic_pdf_parser is None:
             from app.parsing.parsers.pdf_parser import PDFParser
 
-            logger.debug("[pdf] Initializing PyMuPDF parser (basic)")
+            logger.debug("[pdf] Initializing pdfplumber parser (basic)")
             self._basic_pdf_parser = PDFParser()
-        else:
-            # Keep the lazy-import contract observable in tests that clear `sys.modules["fitz"]`
-            # after previous parser initialization.
-            try:
-                importlib.import_module("fitz")
-            except Exception as exc:
-                logger.debug("[pdf] Ignoring PyMuPDF lazy import probe failure: %s", exc)
         return self._basic_pdf_parser
 
     def _get_cached_parser(

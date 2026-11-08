@@ -32,6 +32,7 @@
 ## 架构与设计
 
 - [architecture.md](./architecture.md)：Ordo 技术架构总览。
+- [design/p0-remediation-and-architecture.md](./design/p0-remediation-and-architecture.md)：v1.0.2 P0 加固记录与架构/时序图。
 - [backend_structure.md](./backend_structure.md)：Backend 目录结构与路由认证约定。
 - [guides/rag_platform_design_principles.md](./guides/rag_platform_design_principles.md)：企业知识流水线设计准则（数据评估、解析选型、治理、检索与发布边界）。
 - [guides/langchain_agent_migration.md](./guides/langchain_agent_migration.md)：LangChain / LangGraph 架构说明与迁移记录。
@@ -112,7 +113,7 @@
 ## 发布与版本（Releases / Versions）
 
 - [releases/README.md](./releases/README.md)：最新发布与版本索引。
-- [releases/v1.0.1.md](./releases/v1.0.1.md)：当前最新稳定版的对外发布说明。
+- [releases/v1.0.2.md](./releases/v1.0.2.md)：当前最新稳定版的对外发布说明。
 - [releases/v1.0.0.md](./releases/v1.0.0.md)：首个公开稳定版的发布说明。
 
 ## 数据治理（Governance）

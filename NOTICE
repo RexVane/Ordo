@@ -100,9 +100,14 @@ top-level license alone:
 This product depends on additional third-party packages declared in
 requirements.txt (Python) and web/package.json (JavaScript). Those packages are
 distributed under their own licenses and are not redistributed in source form
-as part of this repository. Notable copyleft-licensed runtime dependencies:
+as part of this repository.
 
-  - PyMuPDF (fitz)  — GNU AGPL v3.0 / commercial dual license.
-    Distributing a combined work that includes PyMuPDF may subject that
-    combined work to AGPL-3.0 obligations, including the network-use clause.
-    See the project README for how PDF parsing backends are selected.
+The default Python distribution does not include PyMuPDF (fitz), which is
+licensed under GNU AGPL v3.0 / a commercial dual license. Distributing a
+combined work that includes PyMuPDF may subject that combined work to AGPL-3.0
+obligations, including the network-use clause.
+
+PyMuPDF is available only through the opt-in `requirements-agpl.txt` extra for
+optional OCR/preprocess features. Install it only if you accept those
+obligations or hold a commercial license from the upstream vendor. The default
+`basic` PDF parser uses pdfplumber/pypdf/pypdfium2 instead.

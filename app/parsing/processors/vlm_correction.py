@@ -5,14 +5,16 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-import fitz  # PyMuPDF
 import httpx
 from langchain_core.documents import Document
 
+from app.core.agpl_components import lazy_pymupdf
 from app.core.async_bridge import run_coroutine_sync as _run_coroutine_sync
 from app.core.config import settings
 from app.rag.core.logging import get_logger
 from app.rag.core.vision_reader import _describe_with_vision_llm
+
+fitz = lazy_pymupdf()
 
 
 def should_apply_vlm_correction(

@@ -1532,6 +1532,11 @@ def validate_kg_search(settings):
 
 
 def validate_vector_write_and_table_catalog(settings):
+    vector_backend = str(getattr(settings, "VECTOR_BACKEND", "milvus") or "milvus").strip().lower()
+    _raise_if(
+        is_production_env() and vector_backend == "memory",
+        "VECTOR_BACKEND=memory is not allowed in production; use milvus/faiss/chroma",
+    )
     _require_setting_int_min(settings, "VECTOR_WRITE_BATCH_SIZE", 0, 1, "VECTOR_WRITE_BATCH_SIZE must be >= 1")
     _require_setting_int_min(
         settings,

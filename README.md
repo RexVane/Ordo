@@ -10,7 +10,7 @@
 
 <p>
   <img src="https://img.shields.io/badge/platform-macOS%20%7C%20Windows%20%7C%20Linux-lightgrey.svg" alt="Platform: macOS | Windows | Linux"/>
-  <a href="./docs/releases/v1.0.1.md"><img src="https://img.shields.io/badge/release-v1.0.1-2563EB.svg" alt="Release v1.0.1"/></a>
+  <a href="./docs/releases/v1.0.2.md"><img src="https://img.shields.io/badge/release-v1.0.2-2563EB.svg" alt="Release v1.0.2"/></a>
   <a href="./LICENSE"><img src="https://img.shields.io/badge/License-Apache_2.0-blue.svg" alt="License: Apache 2.0"/></a>
   <img src="https://img.shields.io/badge/python-3.11+-blue.svg" alt="Python 3.11+"/>
 </p>
@@ -179,3 +179,7 @@ make web
 ## 📄 开源协议
 
 本项目基于 [Apache License 2.0](./LICENSE) 开源。
+
+默认发行版与 `requirements.txt` 不包含 AGPL 组件；可选 OCR/预处理功能如需
+PyMuPDF，请显式安装 [`requirements-agpl.txt`](./requirements-agpl.txt) 并确认接受
+AGPL-3.0 义务（或取得上游商业许可）。详见 [`NOTICE`](./NOTICE)。

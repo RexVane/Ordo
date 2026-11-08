@@ -1,0 +1,12 @@
+# Optional AGPL-3.0 components.
+#
+# The default Ordo image deliberately excludes these packages. Install this
+# file only if you accept the AGPL-3.0 obligations (including the network-use
+# clause) or hold a commercial license from the upstream vendor.
+#
+# PyMuPDF is required by optional OCR/preprocess features:
+# - page rasterization for RapidOCR validation
+# - image preprocessing / watermark annotation stripping
+# - DeepSeek OCR and ETL4LLM image extraction
+# - Docling page-render fallback
+PyMuPDF==1.27.2.2

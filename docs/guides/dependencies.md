@@ -2,8 +2,10 @@
 
 Ordo 支持两种 Embedding 模式，对应不同的依赖需求。
 
-本仓库提供三组依赖文件：
-- `requirements.txt`：统一依赖（包含 API 模式 / 本地 Embedding / 开发工具）
+本仓库提供以下依赖文件：
+- `requirements.txt`：默认运行时依赖（API 模式 / 本地 Embedding）；**不包含** AGPL 组件
+- `requirements-dev.txt`：本地开发与 CI 工具（pytest、ruff、pip-audit）
+- `requirements-agpl.txt`：可选 AGPL 组件（PyMuPDF，仅 OCR/预处理等可选能力需要）
 
 ---
 
@@ -187,6 +189,23 @@ JWT_GROUPS_SYNC_TTL_SEC=60
 - best-effort：同步失败不会阻塞请求（不会影响鉴权结果）。
 - 有节流：`JWT_GROUPS_SYNC_TTL_SEC` 用于降低写放大（单进程内 best-effort TTL）。
 - 当前实现为 add-only（仅补齐缺失的组/成员，不做删除）。
+
+---
+
+## 📄 PDF 解析与许可证
+
+默认 `basic` PDF 解析器使用 `pdfplumber` + `pypdfium2`（`pdfplumber` 的传递依赖），
+不需要 PyMuPDF。质量评分使用 `pypdf` 读取页面旋转与注释。
+
+PyMuPDF 采用 AGPL-3.0 / 商业双许可，默认镜像和 `requirements.txt` 不包含它。
+仅当启用 OCR 校验、图像预处理、水印处理、VLM 校正、DeepSeek OCR、ETL4LLM 或
+Docling 渲染回退等可选能力，并且确认接受 AGPL-3.0 义务时，才安装：
+
+```bash
+pip install -r requirements-agpl.txt
+```
+
+详见 [`NOTICE`](../../NOTICE) 与 [`docs/releases/v1.0.2.md`](../releases/v1.0.2.md)。
 
 ---
 

@@ -15,13 +15,13 @@ from uuid import UUID
 
 from app.core.config import settings
 from app.core.constants import EmbeddingProviders
+from app.core.env import is_production_env
+from app.core.vector_backends import validate_vector_backend, vector_store_persistence
 from app.rag.core.filters import match_metadata_filter
 from app.rag.core.hashing import stable_hash
 from app.rag.core.logging import get_logger
 from app.rag.embedding import create_langchain_embeddings_from_config
 from app.storage.vector.milvus import milvus_store
-from app.storage.vector.pgvector import PGVectorStore
-from app.storage.vector.qdrant import QdrantVectorStore
 
 logger = get_logger("storage.vector.factory")
 
@@ -244,6 +244,9 @@ def _chroma_ids_matching_filter(collection: Any, *, document_id: UUID, metadata_
 class BaseVectorStore:
     """Unified interface for future FAISS/Chroma/Memory extensions."""
 
+    # "persistent" backends survive a process restart; "ephemeral" backends do not.
+    persistence: str = "persistent"
+
     def add_documents(self, docs: list[dict[str, Any]], document_id: UUID, tenant_id: UUID):
         raise NotImplementedError
 
@@ -359,7 +362,12 @@ class MemoryVectorStore(BaseVectorStore):
     """
     Lightweight in-memory vector store for local testing or no-Milvus scenarios.
     Uses OpenAI-compatible embeddings (requires EMBEDDING_API_KEY/LLM_API_KEY).
+
+    This backend is intentionally ephemeral: vectors are lost when the process
+    exits. Do not use it for durable knowledge bases.
     """
+
+    persistence = "ephemeral"
 
     def __init__(self):
         provider = EmbeddingProviders.PROVIDER_MAP.get(
@@ -862,7 +870,7 @@ class ChromaVectorStore(BaseVectorStore):
 
 _VECTOR_STORE_SINGLETONS: dict[str, BaseVectorStore] = {}
 _VECTOR_STORE_SINGLETONS_LOCK = threading.RLock()
-_EMBEDDING_AWARE_VECTOR_BACKENDS = frozenset({"memory", "faiss", "chroma", "qdrant", "pgvector"})
+_EMBEDDING_AWARE_VECTOR_BACKENDS = frozenset({"memory", "faiss", "chroma"})
 
 
 def _normalize_region(region: str | None = None) -> str:
@@ -898,7 +906,13 @@ def _resolve_vector_backend(*, backend: str | None = None, region: str | None = 
     requested = str(backend or settings.VECTOR_BACKEND or "milvus").strip().lower()
     if region_key:
         requested = _load_vector_region_backends().get(region_key, requested)
-    return requested, (region_key or None)
+    # VECTOR_REGION_BACKENDS is free-form JSON, so it can bypass the Settings
+    # Literal. Validate here as well to keep placeholder backends from silently
+    # becoming data-loss traps.
+    backend_name = validate_vector_backend(requested)
+    if is_production_env() and vector_store_persistence(backend_name) == "ephemeral":
+        raise ValueError(f"Vector backend '{backend_name}' is ephemeral and is not allowed in production")
+    return backend_name, (region_key or None)
 
 
 def _embedding_client_cache_token() -> str:
@@ -946,13 +960,15 @@ def get_vector_store(*, backend: str | None = None, region: str | None = None) -
             store = FAISSVectorStore()
         elif backend_name == "chroma":
             store = ChromaVectorStore()
-        elif backend_name == "qdrant":
-            store = QdrantVectorStore()
-        elif backend_name == "pgvector":
-            store = PGVectorStore()
-        else:
-            store = StubVectorStore()
+        else:  # pragma: no cover - guarded by validate_vector_backend above
+            raise ValueError(f"Unsupported VECTOR_BACKEND '{backend_name}'")
 
+        if vector_store_persistence(backend_name) == "ephemeral":
+            logger.warning(
+                "Vector backend '%s' is ephemeral; vectors will be lost on restart. "
+                "Use milvus/faiss/chroma for durable knowledge bases.",
+                backend_name,
+            )
         _VECTOR_STORE_SINGLETONS[cache_key] = store
         return store
 

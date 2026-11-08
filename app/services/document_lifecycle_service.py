@@ -16,10 +16,10 @@ from app.core.config import settings
 from app.core.database import SessionLocal
 from app.models.document import Document as DBDocument
 from app.models.document import DocumentChunk
-from app.services.document_status import DELETING, transition_document_status
 from app.rag.core.logging import get_logger
 from app.services.audit_log_service import audit_log_event
 from app.services.dataset_service import DatasetService
+from app.services.document_status import DELETING, transition_document_status
 from app.storage.object.minio import minio_service
 from app.storage.object.runtime import is_object_storage_uri, resolve_document_object_reference
 

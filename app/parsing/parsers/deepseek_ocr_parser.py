@@ -14,18 +14,20 @@ import time
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from io import BytesIO
 from pathlib import Path
+from typing import Any
 from urllib.parse import unquote
 
-import fitz  # PyMuPDF
 import requests
 from langchain_core.documents import Document
 from PIL import Image
 
+from app.core.agpl_components import lazy_pymupdf
 from app.core.config import settings
 from app.core.constants import NON_CRITICAL_EXCEPTION_LOG_MESSAGE
 from app.rag.core.logging import get_logger
 
 logger = get_logger("parsing.deepseek_ocr")
+fitz = lazy_pymupdf()
 
 _DEEPSEEK_OCR_FALLBACK_LOG_MESSAGE = "Ignoring non-critical DeepSeek OCR fallback failure: %s"
 
@@ -108,7 +110,7 @@ class DeepSeekOCRParser:
         return True
 
     @staticmethod
-    def _unique_xrefs(doc: fitz.Document) -> list[int]:
+    def _unique_xrefs(doc: Any) -> list[int]:
         seen_xrefs: set[int] = set()
         xrefs: list[int] = []
         for page in doc:
@@ -126,7 +128,7 @@ class DeepSeekOCRParser:
                 xrefs.append(xref)
         return xrefs
 
-    def _extract_pdf_image_payload(self, doc: fitz.Document, *, xref: int) -> tuple[bytes | None, str]:
+    def _extract_pdf_image_payload(self, doc: Any, *, xref: int) -> tuple[bytes | None, str]:
         try:
             extracted = doc.extract_image(xref) or {}
         except Exception:
@@ -194,7 +196,7 @@ class DeepSeekOCRParser:
             raise ValueError("DeepSeek OCR currently supports PDF only")
         return path
 
-    def _extract_pdf_images(self, doc: fitz.Document, *, images_dir: Path) -> int:
+    def _extract_pdf_images(self, doc: Any, *, images_dir: Path) -> int:
         """
         Extract embedded PDF images into `images_dir`.
 
@@ -231,7 +233,7 @@ class DeepSeekOCRParser:
 
         return written
 
-    def _persist_page_image_variants(self, *, pix: fitz.Pixmap, png_bytes: bytes, images_dir: Path) -> None:
+    def _persist_page_image_variants(self, *, pix: Any, png_bytes: bytes, images_dir: Path) -> None:
         """
         Persist page-render images into `images_dir` using sha256-based filenames.
 
@@ -267,7 +269,7 @@ class DeepSeekOCRParser:
         self,
         *,
         page_idx: int,
-        pix: fitz.Pixmap,
+        pix: Any,
         png_bytes: bytes,
         images_dir: Path,
     ) -> tuple[Path, Path]:
@@ -453,14 +455,14 @@ class DeepSeekOCRParser:
                 logger.debug(_DEEPSEEK_OCR_FALLBACK_LOG_MESSAGE, exc)
 
     @staticmethod
-    def _page_jpg_bytes(pix: fitz.Pixmap) -> bytes | None:
+    def _page_jpg_bytes(pix: Any) -> bytes | None:
         try:
             return pix.tobytes("jpg")
         except Exception:
             return None
 
     def _persist_page_assets(
-        self, *, page_idx: int, pix: fitz.Pixmap, images_dir: Path
+        self, *, page_idx: int, pix: Any, images_dir: Path
     ) -> tuple[bytes, Path, Path, bytes | None]:
         img_bytes = pix.tobytes("png")
         self._persist_page_image_variants(pix=pix, png_bytes=img_bytes, images_dir=images_dir)
@@ -497,7 +499,7 @@ class DeepSeekOCRParser:
     def _process_pages_sequential(
         self,
         *,
-        doc: fitz.Document,
+        doc: Any,
         file_path: Path,
         total_pages: int,
         images_dir: Path,
@@ -528,7 +530,7 @@ class DeepSeekOCRParser:
         *,
         executor: ThreadPoolExecutor,
         idx: int,
-        page_obj: fitz.Page,
+        page_obj: Any,
         total_pages: int,
         file_path: Path,
         images_dir: Path,
@@ -575,7 +577,7 @@ class DeepSeekOCRParser:
     def _process_pages_parallel(
         self,
         *,
-        doc: fitz.Document,
+        doc: Any,
         file_path: Path,
         total_pages: int,
         images_dir: Path,

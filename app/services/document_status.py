@@ -46,7 +46,7 @@ ALLOWED_TRANSITIONS: dict[str, frozenset[str]] = {
 }
 
 
-class IllegalDocumentStatusTransition(ValueError):
+class IllegalDocumentStatusTransition(ValueError):  # noqa: N818 - public API name kept for compatibility
     """Raised when a document status transition violates the state machine."""
 
 

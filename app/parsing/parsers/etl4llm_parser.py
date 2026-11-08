@@ -18,16 +18,17 @@ from io import BytesIO
 from pathlib import Path
 from typing import Any
 
-import fitz  # PyMuPDF
 import requests
 from langchain_core.documents import Document
 from PIL import Image as PILImage
 
+from app.core.agpl_components import lazy_pymupdf
 from app.core.config import settings
 from app.core.constants import NON_CRITICAL_EXCEPTION_LOG_MESSAGE
 from app.rag.core.logging import get_logger
 
 logger = get_logger("parsing.etl4llm")
+fitz = lazy_pymupdf()
 _ETL4LLM_PARSER_FALLBACK_LOG_MESSAGE = "Ignoring non-critical ETL4LLM parser fallback failure: %s"
 
 

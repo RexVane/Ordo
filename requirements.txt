@@ -47,7 +47,9 @@ minio==7.2.20
 # MagicPDF (magic-pdf) is an optional, heavy local parser (torch/transformers).
 # Install it separately only when enabling MAGIC_PDF_ENABLED=true.
 # See: docs/guides/magicpdf_guide.md
-PyMuPDF==1.27.2.2
+# PyMuPDF is intentionally NOT a base dependency: it is AGPL-3.0/commercial
+# dual-licensed. The default parser uses pdfplumber/pypdf/pypdfium2.
+# Install requirements-agpl.txt only if you accept the AGPL-3.0 obligations.
 unstructured==0.18.32
 python-magic==0.4.27
 markdown==3.10.2

@@ -1,0 +1,86 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version to publish, e.g. 1.0.2"
+        required: true
+
+permissions:
+  contents: write
+  packages: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.11"
+
+      - name: Resolve and verify version
+        id: version
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            version="${{ inputs.version }}"
+          else
+            version="${GITHUB_REF_NAME#v}"
+          fi
+          python scripts/release/check_versions.py --version "$version"
+          echo "value=$version" >> "$GITHUB_OUTPUT"
+
+      - name: Build backend image
+        run: |
+          docker build \
+            --build-arg ORDO_BUILD_SHA="${GITHUB_SHA}" \
+            --build-arg ORDO_BUILD_TIME="$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            -t "ordo-api:${GITHUB_REF_NAME}" \
+            -f docker/Dockerfile .
+
+      - name: Build web image
+        run: |
+          docker build \
+            --build-arg ORDO_BUILD_SHA="${GITHUB_SHA}" \
+            --build-arg ORDO_BUILD_TIME="$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            -t "ordo-web:${GITHUB_REF_NAME}" \
+            -f web/Dockerfile.prod web
+
+      - name: Log in to GHCR
+        run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+
+      - name: Push images
+        env:
+          VERSION: ${{ steps.version.outputs.value }}
+        run: |
+          repo="$(echo "${GITHUB_REPOSITORY}" | tr '[:upper:]' '[:lower:]')"
+          for image in ordo-api ordo-web; do
+            docker tag "${image}:${GITHUB_REF_NAME}" "ghcr.io/${repo}/${image}:${VERSION}"
+            docker tag "${image}:${GITHUB_REF_NAME}" "ghcr.io/${repo}/${image}:sha-${GITHUB_SHA}"
+            docker push "ghcr.io/${repo}/${image}:${VERSION}"
+            docker push "ghcr.io/${repo}/${image}:sha-${GITHUB_SHA}"
+          done
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ steps.version.outputs.value }}
+        run: |
+          gh release create "v${VERSION}" \
+            --title "Ordo v${VERSION}" \
+            --notes-file "docs/releases/v${VERSION}.md" \
+            --verify-tag

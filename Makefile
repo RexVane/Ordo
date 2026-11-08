@@ -590,6 +590,20 @@ diagnostics:
 parsing-proof-sample:
 	$(PY) scripts/run_sample_parsing_retrieval_proof.py
 
+.PHONY: check-versions release-check release-tag
+check-versions:
+	$(PY) scripts/release/check_versions.py
+
+release-check: check-versions
+	@test -z "$$(git status --porcelain)" || (echo "Working tree is dirty; commit or stash before release-check" >&2; exit 1)
+	@$(MAKE) verify
+
+release-tag: check-versions
+	@test -n "$(VERSION)" || (echo "VERSION is required, e.g. make release-tag VERSION=1.0.2" >&2; exit 1)
+	$(PY) scripts/release/check_versions.py --version "$(VERSION)"
+	git tag -a "v$(VERSION)" -m "Ordo v$(VERSION)"
+	@echo "Tag v$(VERSION) created. Next: git push origin v$(VERSION)"
+
 db-upgrade:
 	$(PY) scripts/alembic_cli.py -c alembic.ini upgrade head
 

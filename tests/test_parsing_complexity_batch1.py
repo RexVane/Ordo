@@ -97,18 +97,15 @@ def test_pdf_parser_extract_image_documents_deduplicates_xrefs_and_keeps_code_me
     Image.new("RGB", (4, 4), color="white").save(image_buffer, format="PNG")
     image_bytes = image_buffer.getvalue()
 
-    class _FakePdf:
-        def __len__(self) -> int:
-            return 2
-
-        def extract_image(self, xref: int) -> dict[str, bytes]:
-            assert xref == 7
-            return {"image": image_bytes}
+    class _FakeStream:
+        def get_data(self) -> bytes:
+            return image_bytes
 
     class _FakePage:
-        def get_images(self, *, full: bool) -> list[tuple[int]]:
-            assert full is True
-            return [(7,), (7,)]
+        images = [
+            {"name": "image-7", "srcsize": (4, 4), "stream": _FakeStream()},
+            {"name": "image-7", "srcsize": (4, 4), "stream": _FakeStream()},
+        ]
 
     monkeypatch.setattr(
         "app.parsing.parsers.pdf_parser.decode_image_codes",
@@ -117,10 +114,10 @@ def test_pdf_parser_extract_image_documents_deduplicates_xrefs_and_keeps_code_me
     monkeypatch.setattr("app.parsing.parsers.pdf_parser.infer_visual_kind_from_pixels", lambda image: "ignored")
 
     documents = PDFParser()._extract_image_documents(
-        pdf_document=_FakePdf(),
         page=_FakePage(),
         file_path=tmp_path / "scan.pdf",
         page_num=1,
+        total_pages=2,
     )
 
     assert len(documents) == 1

@@ -27,14 +27,15 @@ from os import PathLike
 from pathlib import Path
 from typing import Any
 
-import fitz  # PyMuPDF
 import pdfplumber
 from PIL import Image
 
+from app.core.agpl_components import lazy_pymupdf
 from app.deepdoc.parser.pdf_parser import IntegratedPipelinePdfParser
 from app.rag.core.logging import get_logger
 
 logger = get_logger("deepdoc.parser.docling")
+fitz = lazy_pymupdf()
 _DOCLING_PARSER_FALLBACK_LOG_MESSAGE = "Ignoring non-critical docling parser fallback failure: %s"
 _ExtractedPosition = tuple[list[int], float, float, float, float]
 _CropPosition = tuple[int, int, int, int, int]

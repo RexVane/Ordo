@@ -10,7 +10,7 @@
 
 <p>
   <img src="https://img.shields.io/badge/platform-macOS%20%7C%20Windows%20%7C%20Linux-lightgrey.svg" alt="Platform: macOS | Windows | Linux"/>
-  <a href="./docs/releases/v1.0.1.md"><img src="https://img.shields.io/badge/release-v1.0.1-2563EB.svg" alt="Release v1.0.1"/></a>
+  <a href="./docs/releases/v1.0.2.md"><img src="https://img.shields.io/badge/release-v1.0.2-2563EB.svg" alt="Release v1.0.2"/></a>
   <a href="./LICENSE"><img src="https://img.shields.io/badge/License-Apache_2.0-blue.svg" alt="License: Apache 2.0"/></a>
   <img src="https://img.shields.io/badge/python-3.11+-blue.svg" alt="Python 3.11+"/>
 </p>
@@ -178,3 +178,8 @@ Full list: `make help`.
 ## 📄 License
 
 Licensed under the [Apache License 2.0](./LICENSE).
+
+The default distribution and `requirements.txt` do not include AGPL components.
+Optional OCR/preprocess features that need PyMuPDF require the explicit
+[`requirements-agpl.txt`](./requirements-agpl.txt) extra and acceptance of the
+AGPL-3.0 obligations (or a commercial license). See [`NOTICE`](./NOTICE).

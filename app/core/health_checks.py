@@ -12,6 +12,8 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any, Literal
 
+from app.core.vector_backends import vector_store_persistence
+
 HealthMode = Literal["ready", "health"]
 
 
@@ -110,7 +112,11 @@ def check_vector(
       backward-compatible response fields.
     """
     vector_backend = (getattr(settings, "VECTOR_BACKEND", "milvus") or "milvus").lower()
-    vector_status: dict[str, Any] = {"backend": vector_backend, "status": "unknown"}
+    vector_status: dict[str, Any] = {
+        "backend": vector_backend,
+        "persistence": vector_store_persistence(vector_backend),
+        "status": "unknown",
+    }
     milvus_status: dict[str, Any] = {"status": "not_configured", "count": None}
     ok = True
 

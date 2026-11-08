@@ -28,7 +28,7 @@ def sample_pdf_text_pages(
       }
     """
     try:
-        import fitz  # PyMuPDF
+        import pdfplumber
     except Exception:
         return _empty_pdf_text_sample()
 
@@ -37,12 +37,12 @@ def sample_pdf_text_pages(
         return _empty_pdf_text_sample()
 
     try:
-        doc = fitz.open(str(path))
+        pdf = pdfplumber.open(path)
     except Exception:
         return _empty_pdf_text_sample()
 
     try:
-        page_count = int(getattr(doc, "page_count", 0) or 0)
+        page_count = int(len(pdf.pages) or 0)
         if page_count <= 0:
             return {"page_count": page_count, "samples": [], "is_scanned": False}
 
@@ -58,8 +58,8 @@ def sample_pdf_text_pages(
         samples: list[dict[str, Any]] = []
         for page_no in idxs:
             try:
-                page = doc.load_page(page_no - 1)
-                txt = (page.get_text("text") or "").strip()
+                page = pdf.pages[page_no - 1]
+                txt = (page.extract_text() or "").strip()
             except Exception:
                 txt = ""
 
@@ -71,7 +71,7 @@ def sample_pdf_text_pages(
         return {"page_count": page_count, "samples": samples, "is_scanned": is_scanned}
     finally:
         try:
-            doc.close()
+            pdf.close()
         except Exception as exc:
             logger.debug("Ignoring PDF diagnostics document close failure: %s", exc)
 

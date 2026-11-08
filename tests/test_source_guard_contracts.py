@@ -590,7 +590,7 @@ def test_retrieval_handbook_uses_the_live_knowledge_tab_route() -> None:
 
 
 def test_current_release_metadata_is_consistent() -> None:
-    version = "1.0.1"
+    version = "1.0.2"
     tag = f"v{version}"
     app_package = _read("app/__init__.py")
     web_package = json.loads(_read("web/package.json"))

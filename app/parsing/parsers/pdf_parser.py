@@ -1,11 +1,17 @@
 """
-PDF parser (based on PyMuPDF).
+PDF parser based on pdfplumber / pypdfium2.
+
+The default distribution must not depend on PyMuPDF (AGPL-3.0). pdfplumber
+already provides text extraction, coordinates, embedded images, and page
+rendering (through its pypdfium2 dependency), so the basic parser can stay
+dependency-light and Apache-2.0 compatible.
 """
+
 from io import BytesIO
 from pathlib import Path
 from typing import Any
 
-import fitz  # PyMuPDF
+import pdfplumber
 from langchain_core.documents import Document
 from PIL import Image as PILImage
 
@@ -15,22 +21,23 @@ from app.rag.core.logging import get_logger
 
 
 class PDFParser:
-    """PDF document parser."""
+    """PDF document parser backed by pdfplumber."""
 
-    def _position_tagged_text(self, *, page, page_num: int) -> str:  # noqa: ANN001
+    def _position_tagged_text(self, *, page: Any, page_num: int) -> str:
         blocks: list[str] = []
-        for block in page.get_text("blocks") or []:
+        for line in page.extract_text_lines(return_chars=False) or []:
             try:
-                x0, y0, x1, y1, text, *_rest = block
+                text = str(line.get("text") or "").strip()
+                if not text:
+                    continue
+                x0 = float(line.get("x0") or 0.0)
+                x1 = float(line.get("x1") or 0.0)
+                top = float(line.get("top") or 0.0)
+                bottom = float(line.get("bottom") or 0.0)
             except Exception:
                 get_logger(__name__).debug(NON_CRITICAL_EXCEPTION_LOG_MESSAGE, exc_info=True)
                 continue
-            clean = str(text or "").strip()
-            if not clean:
-                continue
-            blocks.append(
-                f"{clean}@@{int(page_num) + 1}\t{float(x0):.1f}\t{float(x1):.1f}\t{float(y0):.1f}\t{float(y1):.1f}##"
-            )
+            blocks.append(f"{text}@@{int(page_num) + 1}\t{x0:.1f}\t{x1:.1f}\t{top:.1f}\t{bottom:.1f}##")
         return "\n\n".join(blocks).strip()
 
     def _extract_table_signature(self, text: str) -> tuple[str, list[str]] | None:
@@ -65,16 +72,18 @@ class PDFParser:
             }
         return {}
 
-    def _extract_image_payload(self, *, pdf_document, xref: int) -> bytes | None:  # noqa: ANN001
+    def _extract_image_payload(self, *, image_info: dict[str, Any]) -> bytes | None:
         try:
-            extracted = pdf_document.extract_image(xref)
+            stream = image_info.get("stream")
+            if stream is None:
+                return None
+            payload = stream.get_data()
         except Exception:
             get_logger(__name__).debug(NON_CRITICAL_EXCEPTION_LOG_MESSAGE, exc_info=True)
             return None
-        image_bytes = extracted.get("image") if isinstance(extracted, dict) else None
-        if not isinstance(image_bytes, (bytes, bytearray)) or not image_bytes:
+        if not isinstance(payload, (bytes, bytearray)) or not payload:
             return None
-        return bytes(image_bytes)
+        return bytes(payload)
 
     def _load_rgb_image(self, image_bytes: bytes):  # noqa: ANN001
         try:
@@ -131,20 +140,24 @@ class PDFParser:
         page_content = code_text or (f"{visual_kind} image" if visual_kind else "")
         return Document(page_content=page_content, metadata=metadata)
 
-    def _extract_image_documents(self, *, pdf_document, page, file_path: Path, page_num: int) -> list[Document]:  # noqa: ANN001
+    def _extract_image_documents(self, *, page: Any, file_path: Path, page_num: int, total_pages: int) -> list[Document]:
         documents: list[Document] = []
-        seen_xrefs: set[int] = set()
-        total_pages = len(pdf_document)
-        for image_index, image_info in enumerate(page.get_images(full=True) or []):
-            try:
-                xref = int(image_info[0])
-            except Exception:
-                get_logger(__name__).debug(NON_CRITICAL_EXCEPTION_LOG_MESSAGE, exc_info=True)
+        seen_images: set[tuple[str, tuple[int, int] | None]] = set()
+        try:
+            images = list(page.images or [])
+        except Exception:
+            get_logger(__name__).debug(NON_CRITICAL_EXCEPTION_LOG_MESSAGE, exc_info=True)
+            images = []
+        for image_index, image_info in enumerate(images):
+            name = str(image_info.get("name") or "").strip()
+            srcsize = image_info.get("srcsize")
+            srcsize_key = tuple(srcsize) if isinstance(srcsize, (tuple, list)) and len(srcsize) == 2 else None
+            dedupe_key = (name, srcsize_key)
+            if dedupe_key in seen_images:
                 continue
-            if xref in seen_xrefs:
-                continue
-            seen_xrefs.add(xref)
-            image_bytes = self._extract_image_payload(pdf_document=pdf_document, xref=xref)
+            seen_images.add(dedupe_key)
+
+            image_bytes = self._extract_image_payload(image_info=image_info)
             if image_bytes is None:
                 continue
             image = self._load_rgb_image(image_bytes)
@@ -164,43 +177,64 @@ class PDFParser:
                     code_values=code_values,
                 )
             )
+
+        if documents:
+            return documents
+
+        # Some image-only PDFs use filters that pdfplumber cannot decode into a
+        # standalone image. Render the page instead so the visual content is not
+        # silently dropped.
+        try:
+            rendered = page.to_image(resolution=150).original
+        except Exception:
+            get_logger(__name__).debug(NON_CRITICAL_EXCEPTION_LOG_MESSAGE, exc_info=True)
+            return documents
+        if not isinstance(rendered, PILImage.Image):
+            return documents
+        image = rendered.convert("RGB")
+        visual_kind, code_text, code_values = self._decode_image_details(image)
+        documents.append(
+            self._build_image_document(
+                file_path=file_path,
+                page_num=page_num,
+                total_pages=total_pages,
+                image=image,
+                image_index=0,
+                visual_kind=visual_kind,
+                code_text=code_text,
+                code_values=code_values,
+            )
+        )
         return documents
 
     def parse(self, file_path: Path) -> list[Document]:
-        """
-        Parse a PDF into a list of LangChain Documents.
-        """
+        """Parse a PDF into a list of LangChain Documents."""
+        path = Path(file_path)
         documents: list[Document] = []
         previous_table_signature: tuple[str, list[str]] | None = None
 
-        # Open PDF file.
-        pdf_document = fitz.open(str(file_path))
-
-        try:
-            for page_num in range(len(pdf_document)):
-                page = pdf_document[page_num]
-
-                # Extract text.
-                text = page.get_text()
+        with pdfplumber.open(path) as pdf:
+            total_pages = len(pdf.pages)
+            for page_num, page in enumerate(pdf.pages):
+                text = page.extract_text() or ""
                 tagged_text = self._position_tagged_text(page=page, page_num=page_num)
 
                 # Image-only pages still carry valuable visual content.
                 if not text.strip():
                     documents.extend(
                         self._extract_image_documents(
-                            pdf_document=pdf_document,
                             page=page,
-                            file_path=file_path,
+                            file_path=path,
                             page_num=page_num,
+                            total_pages=total_pages,
                         )
                     )
                     continue
 
-                # Build metadata.
                 metadata = {
-                    "source": str(file_path.name),
+                    "source": str(path.name),
                     "page": page_num + 1,
-                    "total_pages": len(pdf_document),
+                    "total_pages": total_pages,
                     "file_type": "pdf",
                 }
                 metadata.update(self._classify_text_page(text))
@@ -217,15 +251,11 @@ class PDFParser:
                             prev_meta["truncated"] = True
                 previous_table_signature = current_signature
 
-                # Create Document object.
                 documents.append(
                     Document(
                         page_content=tagged_text or text,
                         metadata=metadata,
                     )
                 )
-
-        finally:
-            pdf_document.close()
 
         return documents

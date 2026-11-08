@@ -20,8 +20,13 @@ RUN sed -i \
 
 FROM base AS builder
 
+# PyMuPDF is AGPL-3.0/commercial. It is excluded from the default image;
+# set INSTALL_AGPL_EXTRAS=1 only when you accept those obligations.
+ARG INSTALL_AGPL_EXTRAS=0
+
 # 复制依赖文件
 COPY requirements.txt /tmp/requirements.txt
+COPY requirements-agpl.txt /tmp/requirements-agpl.txt
 
 # 安装系统依赖 + Python 依赖（builder stage）
 RUN --mount=type=cache,target=/root/.cache/pip \
@@ -52,6 +57,9 @@ RUN --mount=type=cache,target=/root/.cache/pip \
         if [ "$attempt" = "3" ]; then exit 1; fi; \
         sleep "$((attempt * 10))"; \
     done \
+    && if [ "$INSTALL_AGPL_EXTRAS" = "1" ]; then \
+        /opt/venv/bin/pip install --retries 10 --timeout 120 -r "/tmp/requirements-agpl.txt"; \
+    fi \
     && apt-get purge -y --auto-remove build-essential \
     && rm -rf /var/lib/apt/lists/*
 

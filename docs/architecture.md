@@ -4,7 +4,7 @@
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
-│                         用户界面 (Next.js 14)                      │
+│                         用户界面 (Next.js 16)                      │
 │  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐           │
 │  │ 文档管理     │  │ 智能对话     │  │ 引用展示     │           │
 │  └──────────────┘  └──────────────┘  └──────────────┘           │
@@ -21,7 +21,7 @@
 │  └────────────────────────────────────────────────────────┘     │
 │  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐           │
 │  │ 文档解析     │  │ 混合检索     │  │ Embedding    │           │
-│  │ (PyMuPDF)    │  │ (Vector+BM25)│  │ (BGE/OpenAI) │           │
+│  │ (pdfplumber) │  │ (Vector+BM25)│  │ (BGE/OpenAI) │           │
 │  └──────────────┘  └──────────────┘  └──────────────┘           │
 └──────────────────────────┬──────────────────────────────────────┘
                            │
@@ -44,13 +44,13 @@
 
 | 层级 | 技术选型 | 说明 |
 |------|---------|------|
-| **前端** | Next.js 14 (App Router) + TypeScript | 现代化 React 框架 |
+| **前端** | Next.js 16 (App Router) + TypeScript | 现代化 React 框架 |
 | **UI 组件** | Tailwind CSS + Shadcn/ui | 极简设计系统 |
-| **后端** | FastAPI 0.109 + Python 3.11 | 高性能异步框架 |
+| **后端** | FastAPI 0.135 + Python 3.11 | 高性能异步框架 |
 | **AI 编排** | LangChain 1.x (Runnable + Retriever) | 纯 LangChain RAG 链路 |
-| **向量数据库** | Milvus 2.3 + Etcd + MinIO | 十亿级向量检索 |
+| **向量数据库** | Milvus 2.6 + Etcd + MinIO | 十亿级向量检索 |
 | **关系数据库** | PostgreSQL 15 | 文档/对话持久化 |
-| **Embedding** | BGE-large-zh-v1.5 (本地) | 中文向量模型 |
+| **Embedding** | OpenAI 兼容接口（默认）；可选本地 BGE | 中文向量模型可按部署切换 |
 | **LLM** | OpenAI 兼容接口 | GPT-4 / 自部署模型 |
 | **检索策略** | Hybrid Search (Vector + BM25) | 混合检索算法 |
 | **分词器** | Jieba | 中文分词支持 |
@@ -179,7 +179,7 @@ ENTITY_VECTOR_ENABLED=true
 
 ```bash
 UPLOAD_DIR=/app/uploads
-MAX_FILE_SIZE=10485760  # 10MB
+MAX_FILE_SIZE=50000000  # 50MB
 ALLOWED_EXTENSIONS=.pdf,.txt,.md,.rst,.adoc,.asciidoc,.tex,.yaml,.yml,.toml,.sql,.log,.conf,.ini,.cfg,.env,.properties,.patch,.diff,.srt,.vtt,.mk,.doc,.docx,.ppt,.pptx,.xls,.xlsx,.csv,.html,.htm,.json,.jsonl,.ndjson,.xml,.rss,.atom,.graphql,.gql,.proto,.tf,.hcl
 ```
 
