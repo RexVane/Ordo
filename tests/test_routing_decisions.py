@@ -1,4 +1,4 @@
-"""P1: explainable parser/chunk routing decisions."""
+"""P1: explainable parser routing decisions."""
 
 import importlib.util
 import sys
@@ -18,7 +18,6 @@ def _load(name, relpath):
 
 
 routing = _load("ordo_routing_decisions", "/app/parsing/routing_decisions.py")
-chunk_routing = _load("ordo_chunk_routing_decisions", "/app/rag/chunking/routing_decisions.py")
 
 
 def test_parser_decision_explicit_request_has_full_confidence():
@@ -48,20 +47,3 @@ def test_parser_decision_fallback_never_equals_selected():
     decision = routing.explain_pdf_routing("basic", {"score": 0.6}, None, {})
     assert decision.fallback_parser == "basic"
     assert decision.candidates == ("basic",)
-
-
-def test_chunk_decision_records_and_warns():
-    decision = chunk_routing.explain_chunk_routing(
-        "laws_structured",
-        detected_document_type="legal",
-        confidence=0.62,
-        reasons=["clause markers detected"],
-        profile="auto",
-    )
-    assert decision.selected_strategy == "laws_structured"
-    assert decision.confidence == 0.62
-    assert decision.warnings == ()
-    unknown = chunk_routing.explain_chunk_routing("recursive", detected_document_type="unknown")
-    assert unknown.warnings != ()
-    assert unknown.fallback_strategy == "langchain_recursive"
-    assert unknown.to_trace()["schema"] == chunk_routing.SCHEMA_VERSION

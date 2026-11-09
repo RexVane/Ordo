@@ -1584,7 +1584,7 @@ class Settings(BaseSettings):
     AGENT_LOG_MAX_PREVIEW_CHARS: int = 500
 
     VECTOR_BACKEND: Literal["milvus", "memory", "faiss", "chroma"] = "milvus"
-    # Optional JSON object keyed by region -> backend, e.g. {"cn-shanghai":"qdrant"}.
+    # Optional JSON object keyed by region -> backend, e.g. {"cn-shanghai":"milvus"}.
     VECTOR_REGION_BACKENDS: str = ""
     # Indexing toggles (to reduce duplicate pipelines when desired)
     CHUNK_VECTOR_ENABLED: bool = True
@@ -1620,8 +1620,6 @@ class Settings(BaseSettings):
     CHART_TO_DATA_TIMEOUT_SEC: float = 20.0
     CHART_TO_DATA_MAX_IMAGES: int = 8
     CHART_TO_DATA_MAX_IMAGE_BYTES: int = 5_000_000
-    MATHPIX_APP_ID: str = ""
-    MATHPIX_APP_KEY: str = ""
     EVENT_VECTOR_ENABLED: bool = True
     ENTITY_VECTOR_ENABLED: bool = True
     BM25_INDEX_ENABLED: bool = True

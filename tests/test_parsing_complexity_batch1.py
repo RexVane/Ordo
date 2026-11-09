@@ -9,7 +9,6 @@ from PIL import Image
 from app.parsing.parsers.csv_parser import CsvParser
 from app.parsing.parsers.docx_parser import DocxParser
 from app.parsing.parsers.pdf_parser import PDFParser
-from app.parsing.preprocess.llm_noise_miner import mine_noise_rule_candidates
 from app.parsing.preprocess.orientation import normalize_pdf_rotation
 from app.parsing.utils.cli import resolve_cli_command
 
@@ -130,41 +129,6 @@ def test_pdf_parser_extract_image_documents_deduplicates_xrefs_and_keeps_code_me
     assert document.metadata["image_code_text"] == "HELLO-QR"
     assert document.metadata["image_code_values"] == ["HELLO-QR"]
     assert document.metadata["image_index"] == 0
-
-
-def test_mine_noise_rule_candidates_characterizes_template_and_exact_matches() -> None:
-    result = mine_noise_rule_candidates(
-        [
-            "重复行",
-            "回复时间：昨天",
-            "重复行",
-            "【回复 12 - 标题】",
-            "回复时间：今天",
-            "重复行",
-        ],
-        top_k=5,
-        min_frequency=2,
-    )
-
-    assert result["summary"] == {"input_lines": 6, "candidate_count": 2}
-    assert result["candidates"] == [
-        {
-            "pattern_kind": "exact",
-            "pattern_name": "repeated_line",
-            "pattern": r"(?m)^\s*重复行\s*$",
-            "count": 3,
-            "examples": ["重复行"],
-            "review_required": True,
-        },
-        {
-            "pattern_kind": "template",
-            "pattern_name": "reply_time",
-            "pattern": r"(?m)^\s*回复时间：.*$",
-            "count": 2,
-            "examples": ["回复时间：昨天", "回复时间：今天"],
-            "review_required": True,
-        },
-    ]
 
 
 def test_normalize_pdf_rotation_characterizes_uniform_rotation(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:

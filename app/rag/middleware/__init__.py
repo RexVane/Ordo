@@ -34,7 +34,6 @@ Usage:
         return wrapper
 """
 
-from app.rag.middleware.agent_logging import AgentExecutionLoggingMiddleware
 from app.rag.middleware.base import (
     AgentMiddlewareChain,
     MiddlewareChain,
@@ -75,6 +74,4 @@ __all__ = [
     "PIIMiddleware",
     # Tool logging
     "ToolCallLoggingMiddleware",
-    # Agent logging
-    "AgentExecutionLoggingMiddleware",
 ]

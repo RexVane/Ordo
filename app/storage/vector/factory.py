@@ -325,39 +325,6 @@ class MilvusVectorStore(BaseVectorStore):
         return milvus_store.get_embedding_model()
 
 
-class StubVectorStore(BaseVectorStore):
-    """Placeholder implementation for future backends."""
-
-    def add_documents(self, docs: list[dict[str, Any]], document_id: UUID, tenant_id: UUID):
-        raise RuntimeError("Vector backend not implemented")
-
-    def search(
-        self,
-        query: str,
-        top_k: int,
-        score_threshold: float,
-        document_ids: list[UUID] | None,
-        tenant_id: UUID | None,
-        metadata_filter: dict[str, Any] | None = None,
-    ) -> list[dict[str, Any]]:
-        return []
-
-    def delete_by_document_id(self, document_id: UUID, tenant_id: UUID | None = None) -> None:
-        return
-
-    def delete_by_document_id_and_filter(
-        self,
-        *,
-        document_id: UUID,
-        tenant_id: UUID | None,
-        metadata_filter: dict[str, Any],
-    ) -> None:
-        raise NotImplementedError("Vector backend not implemented")
-
-    def get_embedding_client(self):  # noqa: ANN201
-        raise RuntimeError("Vector backend does not expose an embedding client")
-
-
 class MemoryVectorStore(BaseVectorStore):
     """
     Lightweight in-memory vector store for local testing or no-Milvus scenarios.

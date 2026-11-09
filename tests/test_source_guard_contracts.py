@@ -87,7 +87,6 @@ REQUESTS_GUARD_PATHS = (
     "app/parsing/enrich/chart_to_data.py",
     "app/parsing/enrich/formula_ocr.py",
     "app/parsing/enrich/vlm_image_caption.py",
-    "app/parsing/parsers/mathpix_parser.py",
     "app/parsing/preprocess/deskew.py",
     "app/parsing/preprocess/handwriting_cleanup.py",
     "app/parsing/preprocess/watermark.py",

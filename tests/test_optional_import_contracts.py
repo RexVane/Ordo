@@ -42,15 +42,6 @@ def _hostile_lazy_module(name: str) -> ModuleType:
     return module
 
 
-def _install_llama_index_stub(monkeypatch: pytest.MonkeyPatch) -> None:
-    package = ModuleType("llama_index")
-    package.__dict__["__path__"] = []
-    core = ModuleType("llama_index.core")
-    package.__dict__["core"] = core
-    monkeypatch.setitem(sys.modules, "llama_index", package)
-    monkeypatch.setitem(sys.modules, "llama_index.core", core)
-
-
 def _install_hf_stubs(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setitem(sys.modules, "torch", ModuleType("torch"))
     monkeypatch.setitem(sys.modules, "transformers", _hostile_lazy_module("transformers"))
@@ -138,42 +129,6 @@ def test_reranker_factory_keeps_describe_provider_reexport() -> None:
     from app.rag.reranker import factory as reranker_factory
 
     assert reranker_factory.describe_reranker_provider is capabilities.describe_reranker_provider
-
-
-@pytest.mark.parametrize("strategy", ["llama_index", "llama_index_hierarchical"])
-def test_llama_strategy_does_not_hide_unrelated_runtime_errors(
-    monkeypatch: pytest.MonkeyPatch,
-    strategy: str,
-) -> None:
-    from app.rag.chunking import strategy_matrix
-
-    _install_llama_index_stub(monkeypatch)
-
-    assert strategy_matrix._is_expected_unavailable(strategy, RuntimeError("boom")) is False
-
-
-@pytest.mark.parametrize("message", ["feature disabled", "dependency not installed"])
-def test_llama_strategy_preserves_expected_unavailable_messages(
-    monkeypatch: pytest.MonkeyPatch,
-    message: str,
-) -> None:
-    from app.rag.chunking import strategy_matrix
-
-    _install_llama_index_stub(monkeypatch)
-
-    assert strategy_matrix._is_expected_unavailable("llama_index", RuntimeError(message)) is True
-
-
-@pytest.mark.parametrize("error_type", [ModuleNotFoundError, RuntimeError])
-def test_llama_strategy_treats_missing_or_broken_import_as_unavailable(
-    monkeypatch: pytest.MonkeyPatch,
-    error_type: type[Exception],
-) -> None:
-    from app.rag.chunking import strategy_matrix
-
-    _fail_import(monkeypatch, "llama_index.core", error_type("optional dependency failed"))
-
-    assert strategy_matrix._is_expected_unavailable("llama_index", RuntimeError("boom")) is True
 
 
 def test_colbert_readiness_does_not_read_lazy_transformers_attributes(
