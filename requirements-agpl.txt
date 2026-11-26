@@ -9,4 +9,4 @@
 # - image preprocessing / watermark annotation stripping
 # - DeepSeek OCR and ETL4LLM image extraction
 # - Docling page-render fallback
-PyMuPDF==1.27.2.2
+PyMuPDF==2.1
